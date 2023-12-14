@@ -1,0 +1,4 @@
+/env
+/samples
+/models
+**/__pycache__
