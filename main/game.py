@@ -2,6 +2,7 @@ import chess
 import numpy as np
 import actionspace as asp
 import gameimage as gameimage
+from config import Config
 
 
 class Game:
@@ -32,9 +33,7 @@ class Game:
         """
         return self._search_statistics
 
-    num_actions = 4672  # AlphaZero recomends 4672 for chess
-
-    def __init__(self, board: chess.Board = None):
+    def __init__(self, config: Config, board: chess.Board = None):
         """Constructor for Game class.
 
         Args:
@@ -42,6 +41,7 @@ class Game:
         """
         self.board = chess.Board() if board is None else board
         self._search_statistics = []
+        self._config = config
 
     def terminal(self) -> bool:
         """Checks if the game is over.
@@ -99,7 +99,7 @@ class Game:
             root (Node): MCTS node with calculated child visits.
         """
         sum_visits = sum(child.visits_count for child in root.children.values())
-        child_visits = np.zeros(self.num_actions)
+        child_visits = np.zeros(self._config.num_actions)
         for uci_move, child in root.children.items():
             success, action = asp.uci_to_action(uci_move)
             if success:
@@ -127,12 +127,12 @@ class Game:
             np.ndarray: Image representation of the board.
         """
         if state_index == -1:
-            return gameimage.board_to_image(self.board).astype(np.uint8)
+            return gameimage.board_to_image(self.board, self._config.T).astype(np.uint8)
         else:
             tmp_board = self.board.copy()
             while len(tmp_board.move_stack) > state_index:
                 tmp_board.pop()
-            return gameimage.board_to_image(tmp_board).astype(np.uint8)
+            return gameimage.board_to_image(tmp_board, self._config.T).astype(np.uint8)
 
     def clone(self) -> "Game":
         """Returns a copy of the game.
@@ -140,7 +140,7 @@ class Game:
         Returns:
             Game: Copy of the game.
         """
-        return Game(self.board.copy())
+        return Game(config=self._config, board=self.board.copy())
 
     def to_play(self) -> bool:
         """Returns the current player.

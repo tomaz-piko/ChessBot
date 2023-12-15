@@ -42,7 +42,7 @@ action_space_indices = np.arange(len(action_space)).reshape(
 
 
 def get_board_indices() -> np.ndarray:
-    return asction_space_indices
+    return action_space_indices
 
 
 def get_action_idx(square: tuple, move: str) -> int:

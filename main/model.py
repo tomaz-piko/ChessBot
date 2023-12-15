@@ -1,18 +1,21 @@
 import tensorflow as tf
-import tensorflow.keras as keras
+from keras.saving import register_keras_serializable
+from keras import Model
 from keras.layers import (
     Input,
     Dense,
-    Activation,
     BatchNormalization,
     Conv2D,
     Flatten,
     LeakyReLU,
     add,
 )
+from keras.optimizers import AdamW
+from keras.optimizers.schedules import PolynomialDecay
+from config import Config
 
 
-@keras.saving.register_keras_serializable()
+@register_keras_serializable()
 def softmax_cross_entropy_with_logits(y_true, y_pred):
     p = y_pred
     pi = y_true
@@ -27,7 +30,6 @@ def softmax_cross_entropy_with_logits(y_true, y_pred):
 
     return loss
 
-
 class CustomModel:
     @property
     def input_dims(self):
@@ -41,10 +43,13 @@ class CustomModel:
     def model(self):
         return self._model
 
-    def __init__(self, input_dims, output_dims, num_residual_blocks):
-        self._input_dims = input_dims
-        self._output_dims = output_dims
-        self._num_residual_blocks = num_residual_blocks
+    def __init__(self, config: Config):
+        self._input_dims = config.input_dims
+        self._output_dims = config.output_dims
+        self._num_residual_blocks = config.num_residual_blocks
+        self._conv_filters = config.conv_filters
+        self._num_actions = config.num_actions
+        self._decay_steps = int(config.training_steps / 0.75) * config.epochs
         self._model = self._build_model()
 
     def _build_model(self):
@@ -52,7 +57,7 @@ class CustomModel:
         input_layer = Input(shape=self._input_dims, name="input_layer")
 
         # Define the body
-        x = Conv2D(filters=256, kernel_size=3, strides=1, padding="same")(input_layer)
+        x = Conv2D(filters=self._conv_filters , kernel_size=3, strides=1, padding="same")(input_layer)
         x = BatchNormalization()(x)
         x = LeakyReLU()(x)
 
@@ -61,12 +66,12 @@ class CustomModel:
             x = self._create_residual_block(x)
 
         # Define the policy head and value head
-        policy_head = Conv2D(filters=256, kernel_size=1, padding="same")(x)
+        policy_head = Conv2D(filters=self._conv_filters , kernel_size=1, padding="same")(x)
         policy_head = BatchNormalization()(policy_head)
         policy_head = LeakyReLU()(policy_head)
         policy_head = Conv2D(filters=73, kernel_size=1, padding="same")(policy_head)
         policy_head = Flatten()(policy_head)
-        policy_head = Dense(4672, activation="linear", name="policy_head")(policy_head)
+        policy_head = Dense(self._num_actions, activation="linear", name="policy_head")(policy_head)
 
         value_head = Conv2D(filters=1, kernel_size=1, padding="same")(x)
         value_head = BatchNormalization()(value_head)
@@ -76,10 +81,19 @@ class CustomModel:
         value_head = LeakyReLU()(value_head)
         value_head = Dense(1, activation="tanh", name="value_head")(value_head)
 
+
+        lr_schedule = PolynomialDecay(
+            initial_learning_rate=0.1,
+            decay_steps=self._decay_steps,
+            end_learning_rate=0.0001,
+            power=0.5,
+            cycle=False,
+        )
+        optimizer = AdamW(weight_decay=0.0004, learning_rate=lr_schedule)
         # Define the model
-        model = keras.Model(inputs=input_layer, outputs=[policy_head, value_head])
+        model = Model(inputs=input_layer, outputs=[policy_head, value_head])
         model.compile(
-            optimizer="adam",
+            optimizer=optimizer,
             loss={
                 "policy_head": "mean_squared_error",
                 "value_head": softmax_cross_entropy_with_logits,
@@ -90,10 +104,10 @@ class CustomModel:
 
     def _create_residual_block(self, x):
         skip_connection = x
-        x = Conv2D(filters=256, kernel_size=3, padding="same")(x)
+        x = Conv2D(filters=self._conv_filters , kernel_size=3, padding="same")(x)
         x = BatchNormalization()(x)
         x = LeakyReLU()(x)
-        x = Conv2D(filters=256, kernel_size=3, padding="same")(x)
+        x = Conv2D(filters=self._conv_filters , kernel_size=3, padding="same")(x)
         x = BatchNormalization()(x)
         x = add([x, skip_connection])
         x = LeakyReLU()(x)
@@ -116,3 +130,12 @@ class CustomModel:
 
     def save(self, path):
         self._model.save(path)
+
+    def load(self, path):
+        self._model = tf.keras.models.load_model(path)
+
+    def save_weights(self, path):
+        self._model.save_weights(path)
+
+    def load_weights(self, path):
+        self._model.load_weights(path)

@@ -1,10 +1,9 @@
-import main.config as config
+from config import Config
 import numpy as np
 import math
-import chess
-from main.game import Game
-import main.actionspace as asp
-import tensorflow as tf
+from game import Game
+import actionspace as asp
+from model import CustomModel
 
 
 class Node:
@@ -58,7 +57,7 @@ class Node:
         return 0 if self.visits_count == 0 else self.value_sum / self.visits_count
 
 
-def run_mcts(game: "Game", network: "MyModel", num_simulations: int = 100):
+def run_mcts(game: Game, network: CustomModel, config: Config):
     """Run Monte Carlo Tree Search algorithm from the current game state.
 
     Args:
@@ -70,24 +69,24 @@ def run_mcts(game: "Game", network: "MyModel", num_simulations: int = 100):
     """
     root = Node()  # Priority default is 0
     _evaluate(root, game, network)
-    _add_exploration_noise(root)
+    _add_exploration_noise(root, config)
 
-    for _ in range(num_simulations):
+    for _ in range(config.num_mcts_sims):
         node = root
         tmp_game = game.clone()
         search_path = [node]
 
         while node.expanded():
-            move, node = _select_child(node)
+            move, node = _select_child(node, config)
             tmp_game.make_move(move)
             search_path.append(node)
 
         value = _evaluate(node, tmp_game, network)
         _backpropagate(search_path, value, tmp_game.to_play())
-    return _select_move(root, game), root
+    return _select_move(root, game, config), root
 
 
-def _evaluate(node: Node, game: Game, network) -> float:
+def _evaluate(node: Node, game: Game, network: CustomModel) -> float:
     """Evaluates the current node.
         Expands the node and sets priorities for children.
 
@@ -103,7 +102,8 @@ def _evaluate(node: Node, game: Game, network) -> float:
     policy = {}
     for move in game.legal_moves():
         _, action = asp.uci_to_action(move)
-        policy[move] = np.exp(policy_logits[action])
+        policy_logits_np = np.array(policy_logits[action], dtype=np.float128)
+        policy[move] = np.exp(policy_logits_np)
 
     policy_sum = sum(policy.values())
     for move, p in policy.items():
@@ -112,7 +112,7 @@ def _evaluate(node: Node, game: Game, network) -> float:
     return value
 
 
-def _select_child(node: Node) -> (str, Node):
+def _select_child(node: Node, config: Config) -> (str, Node):
     """Selects a child node to explore next.
 
     Args:
@@ -122,7 +122,7 @@ def _select_child(node: Node) -> (str, Node):
         str, Node: Move string and child node.
     """
     _, action, child = max(
-        (_ucb_score(node, child), action, child)
+        (_ucb_score(node, child, config), action, child)
         for action, child in node.children.items()
     )
     return action, child
@@ -137,11 +137,11 @@ def _backpropagate(search_path: list[Node], value: float, to_play: bool):
         to_play (bool): _description_
     """
     for node in search_path:
-        node.value_sum += value if node.to_play == chess.WHITE else (1 - value)
+        node.value_sum += value if node.to_play == to_play else (1 - value)
         node.visits_count += 1
 
 
-def _select_move(node: Node, game: Game) -> str:
+def _select_move(node: Node, game: Game, config: Config) -> str:
     """Select the next move to play based on the visit counts of the children.
 
     Args:
@@ -153,7 +153,7 @@ def _select_move(node: Node, game: Game) -> str:
         str: Move string.
     """
     visit_counts = [(child.visits_count, move) for move, child in node.children.items()]
-    if game.history_len < 30:
+    if game.history_len < config.num_sampling_moves:
         _, action = _softmax_sample(visit_counts)
     else:
         _, action = max(visit_counts)
@@ -179,7 +179,7 @@ def _softmax_sample(visit_counts: list) -> (int, str):
     return visit_counts[v][0], visit_counts[v][1]
 
 
-def _ucb_score(parent: Node, child: Node) -> float:
+def _ucb_score(parent: Node, child: Node, config: Config) -> float:
     """Calculates the UCB score of the child node.
 
     Args:
@@ -199,7 +199,7 @@ def _ucb_score(parent: Node, child: Node) -> float:
     return prior_score + value_score
 
 
-def _add_exploration_noise(node: Node) -> None:
+def _add_exploration_noise(node: Node, config: Config) -> None:
     """Add dirichlet noise to the root node to encourage exploration on each iteration.
 
     Args:
