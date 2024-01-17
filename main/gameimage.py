@@ -12,12 +12,12 @@ _piece_to_index = {
     chess.KNIGHT: 1,
     chess.BISHOP: 2,
     chess.ROOK: 3,
-    chess.QUEEN: 4,
-    chess.KING: 5,
+    chess.KING: 4,
+    chess.QUEEN: 5,
 }
 # Squares are numbered from 1 to 64. We use assign the number to a row and column of the NxN board
-_board_square_indices = np.flip(np.arange(N * N).reshape((N, N))).astype(np.uint8)
-
+#_board_square_indices = np.flip(np.flip(np.arange(N * N).reshape((N, N))), axis=1).astype(np.int16)
+_board_square_indices = np.flip(np.arange(N * N).reshape((N, N))).astype(np.int16)
 
 # The following functions are used to convert the board to a feature plane representation
 # The feature planes are used as input to the neural network
@@ -33,18 +33,25 @@ def _pieces_planes(board: chess.Board) -> (np.ndarray, np.ndarray):
         np.ndarray: Piece planes for player 1 (N x N x 6)
         np.ndarray: Piece planes for player 2 (N x N x 6)
     """
+    board_square_indices = _board_square_indices
+    if board.turn == chess.BLACK:
+        board = board.copy()
+        board.apply_mirror()
+    else:
+        board_square_indices = np.flip(board_square_indices, axis=1)
     player1_pieces = np.zeros(
-        (N, N, len(_piece_to_index)), dtype=np.uint8
+        (N, N, len(_piece_to_index)), dtype=np.int16
     )  # 6 pieces (pawn, knight, bishop, rook, queen, king)
     player2_pieces = np.zeros(
-        (N, N, len(_piece_to_index)), dtype=np.uint8
+        (N, N, len(_piece_to_index)), dtype=np.int16
     )  # 6 pieces (pawn, knight, bishop, rook, queen, king)
     for piece, idx in _piece_to_index.items():
+        #print(piece, idx)
         player1_pieces[:, :, idx] = np.isin(
-            _board_square_indices, np.array(list(board.pieces(piece, chess.WHITE)))
+            board_square_indices, np.array(list(board.pieces(piece, chess.WHITE)))
         ).astype(int)
         player2_pieces[:, :, idx] = np.isin(
-            _board_square_indices, np.array(list(board.pieces(piece, chess.BLACK)))
+            board_square_indices, np.array(list(board.pieces(piece, chess.BLACK)))
         ).astype(int)
     return player1_pieces, player2_pieces
 
@@ -61,7 +68,7 @@ def _repetitions_planes(board: chess.Board) -> np.ndarray:
     Returns:
         np.ndarray: Repetition planes (N x N x 2)
     """
-    repetitions = np.zeros((N, N, 2), dtype=np.uint8)
+    repetitions = np.zeros((N, N, 2), dtype=np.int16)
     for plane_idx, rep_count in enumerate([2, 3]):
         if board.is_repetition(rep_count):
             repetitions[:, :, plane_idx] = 1
@@ -79,9 +86,9 @@ def _color_plane(board: chess.Board) -> np.ndarray:
         np.ndarray: Color plane (N x N) of ones for white and zeros for black
     """
     if board.turn == chess.WHITE:
-        return np.ones((N, N), dtype=np.uint8)
+        return np.ones((N, N), dtype=np.int16)
     else:
-        return np.zeros((N, N), dtype=np.uint8)
+        return np.zeros((N, N), dtype=np.int16)
 
 
 def _movecount_plane(board: chess.Board) -> np.ndarray:
@@ -93,7 +100,7 @@ def _movecount_plane(board: chess.Board) -> np.ndarray:
     Returns:
         np.ndarray: Movecount plane (N x N) filled with the number of full moves (move pairs)
     """
-    return np.full((N, N), board.fullmove_number - 1, dtype=np.uint8)
+    return np.full((N, N), len(board.move_stack), dtype=np.int16)
 
 
 def _castlingrights_planes(board: chess.Board) -> (np.ndarray, np.ndarray):
@@ -108,8 +115,9 @@ def _castlingrights_planes(board: chess.Board) -> (np.ndarray, np.ndarray):
         np.ndarray: Castling rights plane for player 1 (N x N x 2)
         np.ndarray: Castling rights plane for player 2 (N x N x 2)
     """
-    player1_castling = np.zeros((N, N, 2), dtype=np.uint8)
-    player2_castling = np.zeros((N, N, 2), dtype=np.uint8)
+
+    player1_castling = np.zeros((N, N, 2), dtype=np.int16)
+    player2_castling = np.zeros((N, N, 2), dtype=np.int16)
     if board.has_kingside_castling_rights(chess.WHITE):
         player1_castling[:, :, 0] = 1
     if board.has_queenside_castling_rights(chess.WHITE):
@@ -118,7 +126,10 @@ def _castlingrights_planes(board: chess.Board) -> (np.ndarray, np.ndarray):
         player2_castling[:, :, 0] = 1
     if board.has_queenside_castling_rights(chess.BLACK):
         player2_castling[:, :, 1] = 1
-    return player1_castling, player2_castling
+    if board.turn == chess.WHITE:
+        return player1_castling, player2_castling
+    elif board.turn == chess.BLACK:
+        return player2_castling, player1_castling
 
 
 def _halfmovecount_plane(board: chess.Board) -> np.ndarray:
@@ -132,7 +143,7 @@ def _halfmovecount_plane(board: chess.Board) -> np.ndarray:
     Returns:
         np.ndarray: Halfmovecount plane (N x N) filled with the number of halfmoves since the last capture or pawn move
     """
-    return np.full((N, N), board.halfmove_clock, dtype=np.uint8)
+    return np.full((N, N), board.halfmove_clock, dtype=np.int16)
 
 
 def board_to_image(board: chess.Board, T: int = 8) -> np.ndarray:
@@ -152,7 +163,7 @@ def board_to_image(board: chess.Board, T: int = 8) -> np.ndarray:
     if T < 1:
         raise ValueError("T must be greater than 0")
     L = 7  # 1 for color, 1 for movecount, 2 for P1 castling rights, 2 for P2 castling rights, 1 for halfmovecount
-    image = np.zeros((N, N, (M * T + L)), dtype=np.uint8)
+    image = np.zeros((N, N, (M * T + L)), dtype=np.int16)
     # The M feature planes repeat T times
     tmp_board = board.copy()
     for t in range(T):
@@ -179,3 +190,22 @@ def board_to_image(board: chess.Board, T: int = 8) -> np.ndarray:
     image[:, :, M * T + 4 : M * T + 6] = player2_castling
     image[:, :, M * T + 6] = halfmovecount
     return image
+
+def update_image(image, game, move, T: int = 8) -> np.ndarray:
+    new_image = np.zeros(image.shape, dtype=np.int16)
+    new_image[:, :, 0:M*(T-1)] = image[:, :, M:M*T]
+    tmp_game = game.clone()
+    tmp_game.make_move(move)
+    player1_pieces, player2_pieces = _pieces_planes(tmp_game.board)
+    repetitions = _repetitions_planes(tmp_game.board)
+    new_image[:, :, M*(T-1) : M*(T-1) + 6] = player1_pieces
+    new_image[:, :, M*(T-1) + 6 : M*(T-1) + 12] = player2_pieces
+    new_image[:, :, M*(T-1) + 12] = repetitions[:, :, 0]
+    new_image[:, :, M*(T-1) + 13] = repetitions[:, :, 1]
+    #player1_castling, player2_castling = _castlingrights_planes(tmp_game.board)
+    #new_image[:, :, M*(T-1) + 14] = np.zeros((N, N), dtype=np.int16)
+    #new_image[:, :, M*(T-1) + 15] = new_image[:, :, M*(T-1) + 15] + 1
+    #new_image[:, :, M*(T-1) + 16 : M*(T-1) + 18] = player1_castling
+    #new_image[:, :, M*(T-1) + 18 : M*(T-1) + 20] = player2_castling
+    #new_image[:, :, M*(T-1) + 20] = image[:, :, M*(T-1) + 20] + 1
+    return new_image

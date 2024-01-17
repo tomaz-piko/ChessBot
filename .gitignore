@@ -2,3 +2,7 @@
 /samples
 /models
 **/__pycache__
+.vscode
+main/checkpoints
+main/models
+main/puzzles

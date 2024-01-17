@@ -3,8 +3,7 @@ import numpy as np
 import math
 from game import Game
 import actionspace as asp
-from model import CustomModel
-
+from model_v2 import predict_fn, predict_model
 
 class Node:
     @property
@@ -57,7 +56,7 @@ class Node:
         return 0 if self.visits_count == 0 else self.value_sum / self.visits_count
 
 
-def run_mcts(game: Game, network: CustomModel, config: Config):
+def run_mcts(game: Game, config: Config, num_sims: int, network, trt: bool = False):
     """Run Monte Carlo Tree Search algorithm from the current game state.
 
     Args:
@@ -68,10 +67,11 @@ def run_mcts(game: Game, network: CustomModel, config: Config):
         Move, Root: Return the move to play and the root node with an updated tree layout.
     """
     root = Node()  # Priority default is 0
-    _evaluate(root, game, network)
+    _evaluate(root, game, network, trt)
     _add_exploration_noise(root, config)
+    counter = 0
 
-    for _ in range(config.num_mcts_sims):
+    for _ in range(num_sims):
         node = root
         tmp_game = game.clone()
         search_path = [node]
@@ -80,13 +80,15 @@ def run_mcts(game: Game, network: CustomModel, config: Config):
             move, node = _select_child(node, config)
             tmp_game.make_move(move)
             search_path.append(node)
+            counter += 1
 
-        value = _evaluate(node, tmp_game, network)
+        value = _evaluate(node, tmp_game, network, trt)
         _backpropagate(search_path, value, tmp_game.to_play())
+    print(counter)
     return _select_move(root, game, config), root
 
 
-def _evaluate(node: Node, game: Game, network: CustomModel) -> float:
+def _evaluate(node: Node, game: Game, network, trt: bool) -> float:
     """Evaluates the current node.
         Expands the node and sets priorities for children.
 
@@ -97,15 +99,24 @@ def _evaluate(node: Node, game: Game, network: CustomModel) -> float:
     Returns:
         float: Evaluation value of the node.
     """
-    policy_logits, value = network.predict(game.make_image(-1))
     node.to_play = game.to_play()
+    if game.terminal():
+        return game.terminal_value(node.to_play)
+
+    image = game.make_image(-1).astype(np.float32)
+
+    value, policy_logits = predict_fn(network, image) if trt else predict_model(network, image)
+    value = np.array(value)
+    policy_logits = np.array(policy_logits)
+    #value = value.numpy()
+    #policy_logits = policy_logits.numpy()
+
     policy = {}
     for move in game.legal_moves():
-        _, action = asp.uci_to_action(move)
-        policy_logits_np = np.array(policy_logits[action], dtype=np.float128)
-        policy[move] = np.exp(policy_logits_np)
+        action = asp.uci_to_action(move, game.to_play())
+        policy[move] = np.exp(np.float128(policy_logits[action]), dtype=np.float128)
 
-    policy_sum = sum(policy.values())
+    policy_sum = np.sum(list(policy.values()), dtype=np.float128)
     for move, p in policy.items():
         node.add_child(move, Node(priority=p / policy_sum))
 
@@ -137,7 +148,7 @@ def _backpropagate(search_path: list[Node], value: float, to_play: bool):
         to_play (bool): _description_
     """
     for node in search_path:
-        node.value_sum += value if node.to_play == to_play else (1 - value)
+        node.value_sum += value if node.to_play == to_play else (-value)
         node.visits_count += 1
 
 
@@ -154,10 +165,12 @@ def _select_move(node: Node, game: Game, config: Config) -> str:
     """
     visit_counts = [(child.visits_count, move) for move, child in node.children.items()]
     if game.history_len < config.num_sampling_moves:
-        _, action = _softmax_sample(visit_counts)
+        _, move = _softmax_sample(visit_counts)
     else:
-        _, action = max(visit_counts)
-    return action
+        counts_np = np.asarray([count for count, _ in visit_counts])
+        choice = np.random.default_rng().choice(np.argwhere(counts_np == np.max(counts_np)).flatten())
+        _, move = visit_counts[choice]
+    return move
 
 
 def _softmax_sample(visit_counts: list) -> (int, str):
@@ -175,7 +188,7 @@ def _softmax_sample(visit_counts: list) -> (int, str):
         return np.exp(x) / np.sum(np.exp(x), axis=0)
 
     p = softmax(np.asarray(visit_counts).T[0].astype(int))
-    v = np.random.choice(len(visit_counts), p=p)
+    v = np.random.default_rng().choice(len(visit_counts), p=p)
     return visit_counts[v][0], visit_counts[v][1]
 
 
@@ -195,8 +208,9 @@ def _ucb_score(parent: Node, child: Node, config: Config) -> float:
     )
     pb_c *= math.sqrt(parent.visits_count) / (child.visits_count + 1)
     prior_score = pb_c * child.priority
-    value_score = child.value()
-    return prior_score + value_score
+    q_value = 0 if child.visits_count == 0 else 1 - ((child.value_sum / child.visits_count) + 1) / 2
+    #value_score = 1 - ((child.value() + 1) / 2)
+    return prior_score + q_value
 
 
 def _add_exploration_noise(node: Node, config: Config) -> None:
@@ -206,7 +220,7 @@ def _add_exploration_noise(node: Node, config: Config) -> None:
         node (Node): Current root node.
     """
     moves = node.children.keys()
-    noise = np.random.gamma(config.root_dirichlet_alpha, 1, len(moves))
+    noise = np.random.default_rng().gamma(config.root_dirichlet_alpha, 1, len(moves))
     frac = config.root_exploration_fraction
     for a, n in zip(moves, noise):
         node.children[a].priority = node.children[a].priority * (1 - frac) + n * frac

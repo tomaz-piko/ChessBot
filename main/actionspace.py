@@ -1,4 +1,5 @@
 import numpy as np
+import chess
 
 moves = []
 # Encoding the 'queen moves' for each piece
@@ -87,11 +88,11 @@ def action_idx_to_str(idx: int) -> str:
 
 
 # Columns notation for chess board
-columns_str = ["a", "b", "c", "d", "e", "f", "g", "h"]
+_columns_str = ["a", "b", "c", "d", "e", "f", "g", "h"]
 # Rows notation for chess board
-rows_str = ["1", "2", "3", "4", "5", "6", "7", "8"]
+_rows_str = ["1", "2", "3", "4", "5", "6", "7", "8"]
 # Directions transformed to numpy arrays for easier manipulation
-directions_dict = {
+_directions_dict = {
     "N": np.array((0, 1)),
     "NE": np.array((1, 1)),
     "E": np.array((1, 0)),
@@ -101,6 +102,7 @@ directions_dict = {
     "W": np.array((-1, 0)),
     "NW": np.array((-1, 1)),
 }
+
 # Dictionary for mapping the promotion character to the piece
 # 'n' or 'N' is commonly used for 'Knight'. We use 'K' for 'Knight' to avoid confusion with 'N' for 'North'
 promotions_dict = {
@@ -111,7 +113,7 @@ promotions_dict = {
 }
 
 
-def uci_to_action(uci: str) -> (bool, int):
+def uci_to_action(uci: str, player: bool) -> (bool, int):
     """Converts a UCI string to an action index
 
     Args:
@@ -121,6 +123,10 @@ def uci_to_action(uci: str) -> (bool, int):
         bool: True if the UCI string is valid, False otherwise
         int: Returns the index of the action from actions_dict_reverse for a given UCI string
     """
+    columns_str = _columns_str if player == chess.WHITE else _columns_str[::-1]
+    rows_str = _rows_str if player == chess.WHITE else _rows_str[::-1]
+    directions_dict = _directions_dict
+
     pickup_col = columns_str.index(uci[0])
     pickup_row = rows_str.index(uci[1])
     dropoff_col = columns_str.index(uci[2])
@@ -140,10 +146,8 @@ def uci_to_action(uci: str) -> (bool, int):
                     move_idx = moves_dict[
                         ",".join(["K", direction_long, direction_short])
                     ]
-                    return (
-                        True,
-                        action_space_indices[pickup_col, pickup_row, move_idx],
-                    )
+                    return action_space_indices[pickup_col, pickup_row, move_idx]
+                    
 
     # Check all promotion moves
     if promotion:
@@ -154,18 +158,14 @@ def uci_to_action(uci: str) -> (bool, int):
             if np.all(dropoff_indices == np.array((dropoff_col, dropoff_row))):
                 if promotion == "q":
                     move_idx = moves_dict[",".join(["Q", direction, "1"])]
-                    return (
-                        True,
-                        action_space_indices[pickup_col, pickup_row, move_idx],
-                    )
+                    return action_space_indices[pickup_col, pickup_row, move_idx]
+                    
                 else:
                     move_idx = moves_dict[
                         ",".join(["P", direction, promotions_dict[promotion]])
                     ]
-                    return (
-                        True,
-                        action_space_indices[pickup_col, pickup_row, move_idx],
-                    )
+                    return action_space_indices[pickup_col, pickup_row, move_idx]
+                    
 
     # Only 'Queen moves' left
     for num_squares in [*range(1, 8)]:
@@ -175,12 +175,12 @@ def uci_to_action(uci: str) -> (bool, int):
             )
             if np.all(dropoff_indices == np.array((dropoff_col, dropoff_row))):
                 move_idx = moves_dict[",".join(["Q", direction, str(num_squares)])]
-                return (True, action_space_indices[pickup_col, pickup_row, move_idx])
+                return action_space_indices[pickup_col, pickup_row, move_idx]
 
-    return False, None
+    return None
 
 
-def uci_to_actionstr(uci: str) -> (bool, str):
+def uci_to_actionstr(uci: str, player: bool) -> (bool, str):
     """Converts a UCI string to an action string
 
     Args:
@@ -190,8 +190,5 @@ def uci_to_actionstr(uci: str) -> (bool, str):
         bool: True if the UCI string is valid, False otherwise
         str: Returns the action string for a given UCI string
     """
-    success, action = uci_to_action(uci)
-    if success:
-        return True, action_space[action]
-    else:
-        return False, None
+    action_idx = uci_to_action(uci, player)  
+    return action_space[action_idx]
