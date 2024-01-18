@@ -2,7 +2,7 @@ from config import Config
 import numpy as np
 import actionspace as asp
 from game import Game
-from model_v2 import predict_fn
+from model_v2 import predict_fn, predict_model
 import math
 
 
@@ -34,7 +34,7 @@ class Node:
         return len(self.children) == 0
 
 
-def run_mcts(game: Game, num_simulations: int = 100, network=None):
+def run_mcts(game: Game, num_simulations: int = 100, network=None, trt: bool = True):
     """Run Monte Carlo Tree Search algorithm from the current game state.
 
     Args:
@@ -47,7 +47,7 @@ def run_mcts(game: Game, num_simulations: int = 100, network=None):
     # Initialize the root node
     root = Node()
     root.N = 1
-    expand(root, game, network)
+    expand(root, game, network, trt)
     add_exploration_noise(root)
 
     # Run the simulations
@@ -65,7 +65,7 @@ def run_mcts(game: Game, num_simulations: int = 100, network=None):
 
         # Expand if possible
         if not is_terminal:
-            value = expand(node, tmp_game, network)
+            value = expand(node, tmp_game, network, trt)
         
         # Backpropagate the value
         update(node, -value)
@@ -74,7 +74,7 @@ def run_mcts(game: Game, num_simulations: int = 100, network=None):
     return select_move(root, temp), root
 
 
-def expand(node: Node, game: Game, network=None):
+def expand(node: Node, game: Game, network=None, trt: bool = True):
     """Evaluate the given node using the neural network.
 
     Args:
@@ -83,7 +83,7 @@ def expand(node: Node, game: Game, network=None):
     # Get the policy and value from the neural network
     if node.state is None:
         node.state = game.make_image(-1)
-    value, policy_logits = predict_fn(network, node.state.astype(np.float32))
+    value, policy_logits = predict_fn(network, node.state.astype(np.float32)) if trt else predict_model(network, node.state.astype(np.float32))
     value = np.array(value)
     policy_logits = np.array(policy_logits)
 

@@ -27,7 +27,7 @@ def play_game(config: Config, trt_func):
     num_mcts_sims = config.num_mcts_sims[0] if np.random.default_rng().random() < config.num_mcts_sims_p else config.num_mcts_sims[1]
     while not game.terminal():
         #move, root = run_mcts(game, config, num_mcts_sims, trt_func, trt=True)
-        move, root = run_mcts(game, num_mcts_sims, trt_func)
+        move, root = run_mcts(game, num_mcts_sims, trt_func, True)
         search_statistics.append(calc_search_statistics(config, root, game.to_play()))
         images.append(game.make_image(-1))
         game.make_move(move)

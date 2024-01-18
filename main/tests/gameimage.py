@@ -7,28 +7,29 @@ from config import Config
 
 config = Config()
 M = 6 + 6 + 2
-scholars_mate_game = Game(config=Config(T=1))
+config.T = 1
+scholars_mate_game = Game(config=config)
 moves = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"]
 for move in moves:
     scholars_mate_game.make_move(move)
 
 board = chess.Board(fen="1r1k4/pbpqbp1N/np3n1p/3pp3/Q1N1P3/2PPB3/PP2BPrP/R4R1K w - - 2 15")
-all_pieces_moved_game = Game(board=board, config=Config(T=1))
+all_pieces_moved_game = Game(board=board, config=config)
 
 board = chess.Board(fen="1r1k1N2/pbpqbp2/np3n1p/3pp3/Q1N1P3/2PPB3/PP2BPrP/R4R1K b - - 3 15")
-all_pieces_moved_game2 = Game(board=board, config=Config(T=1))
+all_pieces_moved_game2 = Game(board=board, config=config)
 
 board = chess.Board(fen="r2qk2r/pppb1ppp/2np1n2/2b1p3/2B1P3/2NP1N2/PPPB1PPP/R2QK2R w KQkq - 4 7")
-all_castling_rights_game = Game(board=board, config=Config(T=1))
+all_castling_rights_game = Game(board=board, config=config)
 
 board = chess.Board(fen="r3k1r1/pppbqppp/2np1n2/2b1p3/2B1P3/2NP1N2/PPPBQPPP/R3K1R1 w Qq - 8 9")
-only_queenside_castling_rights_game = Game(board=board, config=Config(T=1))
+only_queenside_castling_rights_game = Game(board=board, config=config)
 
 board = chess.Board(fen="1r2k2r/pppbqppp/2np1n2/2b1p3/2B1P3/2NP1N2/PPPBQPPP/1R2K2R w Kk - 8 9")
-only_kingside_castling_rights_game = Game(board=board, config=Config(T=1))
+only_kingside_castling_rights_game = Game(board=board, config=config)
 
 board = chess.Board(fen="r2k3r/pppbqppp/2np1n2/2b1p3/2B1P3/2NP1N2/PPPBQPPP/R2K3R w - - 8 9")
-no_castling_rights_game = Game(board=board, config=Config(T=1))
+no_castling_rights_game = Game(board=board, config=config)
 
 class TestGameImage(unittest.TestCase):
     # Testing history planes

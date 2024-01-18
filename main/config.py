@@ -40,4 +40,5 @@ class Config:
         self.checkpoint_interval = 5
         self.epochs = 1
         self.verbose = 1
+        self.use_trt = True
         self.allow_gpu_growth = True
