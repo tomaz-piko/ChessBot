@@ -35,8 +35,8 @@ class Config:
         self.minimum_buffer_size = int(self.buffer_size*(3/4)) # Fill three quarters of buffer before starting training
         self.batch_size = 64 # Number of positions to sample from buffer
         self.training_steps = 40000
+        self.pause_between_steps = 2
         self.checkpoint_interval = 2000
         self.epochs = 1
         self.verbose = 1
-        self.use_trt = True
         self.allow_gpu_growth = True

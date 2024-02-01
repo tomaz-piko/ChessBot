@@ -24,7 +24,7 @@ def _create_residual_block(x):
     x = Conv2D(filters=config.conv_filters , kernel_size=3, strides=1, padding="same", use_bias=False, kernel_regularizer=l2(config.l2_reg))(x)
     x = BatchNormalization()(x)
     x = add([skip_connection, x])
-    x = LeakyReLU()(x) # Swtich this and next line
+    x = LeakyReLU()(x)
     return x
 
 def generate_model():
@@ -46,7 +46,7 @@ def generate_model():
     value_head = Flatten()(value_head)
     value_head = Dense(config.conv_filters, use_bias=False, kernel_regularizer=l2(config.l2_reg))(value_head)
     value_head = LeakyReLU()(value_head)
-    value_head = Dense(1, use_bias=False, activation="tanh", name="value_head",  kernel_regularizer=l2(config.l2_reg))(value_head)
+    value_head = Dense(1, use_bias=False, activation="tanh", kernel_regularizer=l2(config.l2_reg), name="value_head")(value_head)
 
     # Define the policy head and value head
     policy_head = Conv2D(filters=2, kernel_size=1, padding="same", use_bias=False, kernel_regularizer=l2(config.l2_reg))(x)
