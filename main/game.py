@@ -7,15 +7,6 @@ from config import Config
 
 class Game:
     @property
-    def search_statistics(self) -> list:
-        """Returns the search statistics of the game.
-
-        Returns:
-            list: List of search statistics.
-        """
-        return self._search_statistics
-
-    @property
     def history(self) -> list:
         """Returns the history of the game.
 
@@ -53,7 +44,7 @@ class Game:
         self.board = chess.Board() if board is None else board
         self.config = config
         self.outcome = None
-        self._search_statistics = []
+        self.search_statistics = []
 
     def terminal(self) -> bool:
         """Checks if the game is over.
@@ -67,7 +58,7 @@ class Game:
             self.outcome = self.board.outcome(claim_draw=True)
             return True
 
-    def terminal_value(self, to_play: bool) -> float:
+    def terminal_value(self, player: bool) -> int:
         """Returns the value of the terminal state.
             0.0 if the game is not over.
             1.0 if the current player wins.
@@ -77,13 +68,13 @@ class Game:
             float: Value of the terminal state.
         """
         if not self.outcome:
-            return 0.0
-        if self.outcome.winner == to_play:
-            return 1.0
-        elif self.outcome.winner == (not to_play):
-            return -1.0
+            return 0
+        if self.outcome.winner == player:
+            return 1
+        elif self.outcome.winner == (not player):
+            return -1
         else:
-            return 0.0
+            return 0
 
     def legal_moves(self) -> list:
         """Returns a list of legal moves from current position.

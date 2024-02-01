@@ -190,22 +190,3 @@ def board_to_image(board: chess.Board, T: int = 8) -> np.ndarray:
     image[:, :, M * T + 4 : M * T + 6] = player2_castling
     image[:, :, M * T + 6] = halfmovecount
     return image
-
-def update_image(image, game, move, T: int = 8) -> np.ndarray:
-    new_image = np.zeros(image.shape, dtype=np.int16)
-    new_image[:, :, 0:M*(T-1)] = image[:, :, M:M*T]
-    tmp_game = game.clone()
-    tmp_game.make_move(move)
-    player1_pieces, player2_pieces = _pieces_planes(tmp_game.board)
-    repetitions = _repetitions_planes(tmp_game.board)
-    new_image[:, :, M*(T-1) : M*(T-1) + 6] = player1_pieces
-    new_image[:, :, M*(T-1) + 6 : M*(T-1) + 12] = player2_pieces
-    new_image[:, :, M*(T-1) + 12] = repetitions[:, :, 0]
-    new_image[:, :, M*(T-1) + 13] = repetitions[:, :, 1]
-    #player1_castling, player2_castling = _castlingrights_planes(tmp_game.board)
-    #new_image[:, :, M*(T-1) + 14] = np.zeros((N, N), dtype=np.int16)
-    #new_image[:, :, M*(T-1) + 15] = new_image[:, :, M*(T-1) + 15] + 1
-    #new_image[:, :, M*(T-1) + 16 : M*(T-1) + 18] = player1_castling
-    #new_image[:, :, M*(T-1) + 18 : M*(T-1) + 20] = player2_castling
-    #new_image[:, :, M*(T-1) + 20] = image[:, :, M*(T-1) + 20] + 1
-    return new_image

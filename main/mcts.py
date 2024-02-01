@@ -1,62 +1,41 @@
-from config import Config
 import numpy as np
-import math
-from game import Game
 import actionspace as asp
-from model_v2 import predict_fn, predict_model
+from game import Game
+from model import predict_fn
+import math
+
+TEMP = 1.0
+PB_C_BASE = 19652
+PB_C_INIT = 1.25
+ROOT_DIRICHLET_ALPHA = 0.3
+ROOT_EXPLORATION_FRACTION = 0.25
+
+# Each state-action pair (s, a) stores a set of statistics:
+#     - N(s, a): visit count
+#     - W(s, a): total action value
+#     - Q(s, a): mean action value
+#     - P(s, a): prior probability of selecting action a in state s
+
+# A node stores the state. The action is the move that led to the state.
+# For the root node the action is None. For all other nodes the action is the key in the children dictionary of the parent node.
 
 class Node:
-    @property
-    def children(self) -> dict:
-        """Returns the children of the node.
+    def __init__(self):
+        # Values for tree representation
+        self.parent = None
+        self.children = {}
 
-        Returns:
-            dict: Dictionary of children. Key is the move string, value is Node.
-        """
-        return self._children
+        # Values for MCTS
+        self.N = 0
+        self.W = 0
+        self.P = 0
+        self.Q = 0
 
-    """Node class for MCTS.
-    """
-
-    def __init__(self, priority: float = 0):
-        # Tree layout specifics
-        self._children = {}  # Dict of children. Key is the move string, value is Node
-
-        # Game specifics
-        self.to_play = None  # Current player
-
-        # MCTS specifics
-        self.priority = priority  # Priority of the node
-        self.value_sum = 0
-        self.visits_count = 0
-
-    def add_child(self, move: str, child: "Node"):
-        """Add a child to the current node. No need to
-
-        Args:
-            move (str): Move string.
-            child (Node): New child node.
-        """
-        self.children[move] = child
-
-    def expanded(self) -> bool:
-        """Checks if the node is expanded. Node is expanded if it has children.
-
-        Returns:
-            bool: True if node is expanded, False otherwise.
-        """
-        return len(self.children) > 0
-
-    def value(self) -> float:
-        """Returns the calculated value of the node.
-
-        Returns:
-            float: Value of the node. 0 if node has not been visited.
-        """
-        return 0 if self.visits_count == 0 else self.value_sum / self.visits_count
+    def is_leaf(self):
+        return len(self.children) == 0
 
 
-def run_mcts(game: Game, config: Config, num_sims: int, network, trt: bool = False):
+def run_mcts(game: Game, network, num_simulations: int = 100, num_sampling_moves = 30, add_noise = True, CPUCT = None):
     """Run Monte Carlo Tree Search algorithm from the current game state.
 
     Args:
@@ -66,161 +45,117 @@ def run_mcts(game: Game, config: Config, num_sims: int, network, trt: bool = Fal
     Returns:
         Move, Root: Return the move to play and the root node with an updated tree layout.
     """
-    root = Node()  # Priority default is 0
-    _evaluate(root, game, network, trt)
-    _add_exploration_noise(root, config)
-    counter = 0
+    rng = np.random.default_rng()
+    # Initialize the root node
+    root = Node()
+    root.N = 1
+    expand(root, game, network)
+    if add_noise:
+        add_exploration_noise(root, rng)
 
-    for _ in range(num_sims):
+    # Run the simulations
+    for _ in range(num_simulations):
         node = root
         tmp_game = game.clone()
-        search_path = [node]
 
-        while node.expanded():
-            move, node = _select_child(node, config)
+        # Select the best leaf node
+        while not node.is_leaf():
+            move, node = select_leaf(node, CPUCT)  # Select best with ucb
             tmp_game.make_move(move)
-            search_path.append(node)
-            counter += 1
 
-        value = _evaluate(node, tmp_game, network, trt)
-        _backpropagate(search_path, value, tmp_game.to_play())
-    print(counter)
-    return _select_move(root, game, config), root
+        # Evaluate the leaf node
+        value, is_terminal = evaluate(tmp_game)
+
+        # Expand if possible
+        if not is_terminal:
+            value = expand(node, tmp_game, network)
+        
+        # Backpropagate the value
+        update(node, -value)
+    # return best_move, root
+    temp = TEMP if game.history_len < num_sampling_moves else 0
+    return select_move(root, rng, temp), root
 
 
-def _evaluate(node: Node, game: Game, network, trt: bool) -> float:
-    """Evaluates the current node.
-        Expands the node and sets priorities for children.
+def expand(node: Node, game: Game, network=None):
+    """Evaluate the given node using the neural network.
 
     Args:
-        node (Node): Node to evaluate.
-        game (Game): Current game state of the node.
-
-    Returns:
-        float: Evaluation value of the node.
+        node (Node): Node to evaluate.z
     """
-    node.to_play = game.to_play()
-    if game.terminal():
-        return game.terminal_value(node.to_play)
-
-    image = game.make_image(-1).astype(np.float32)
-
-    value, policy_logits = predict_fn(network, image) if trt else predict_model(network, image)
+    # Get the policy and value from the neural network
+    value, policy_logits = predict_fn(network, game.make_image(-1).astype(np.float32))
     value = np.array(value)
     policy_logits = np.array(policy_logits)
-    #value = value.numpy()
-    #policy_logits = policy_logits.numpy()
 
     policy = {}
     for move in game.legal_moves():
         action = asp.uci_to_action(move, game.to_play())
-        policy[move] = np.exp(np.float128(policy_logits[action]), dtype=np.float128)
+        policy[move] = np.exp(policy_logits[action], dtype=np.float32)
 
-    policy_sum = np.sum(list(policy.values()), dtype=np.float128)
+    policy_sum = np.sum(list(policy.values()), dtype=np.float32)
     for move, p in policy.items():
-        node.add_child(move, Node(priority=p / policy_sum))
+        child = Node()
+        child.parent = node
+        child.P = p / policy_sum
+        node.children[move] = child
 
     return value
 
 
-def _select_child(node: Node, config: Config) -> (str, Node):
-    """Selects a child node to explore next.
-
-    Args:
-        node (Node): Node to select child from.
-
-    Returns:
-        str, Node: Move string and child node.
-    """
-    _, action, child = max(
-        (_ucb_score(node, child, config), action, child)
-        for action, child in node.children.items()
-    )
-    return action, child
-
-
-def _backpropagate(search_path: list[Node], value: float, to_play: bool):
-    """Backpropagates the value of the node to the root.
-
-    Args:
-        search_path (list[Node]): Path from the root to the node.
-        value (float): Value of the node that was evaluated and expanded in current loop.
-        to_play (bool): _description_
-    """
-    for node in search_path:
-        node.value_sum += value if node.to_play == to_play else (-value)
-        node.visits_count += 1
-
-
-def _select_move(node: Node, game: Game, config: Config) -> str:
-    """Select the next move to play based on the visit counts of the children.
-
-    Args:
-        node (Node): Node to select next move from.
-        game (Game): Current game state.
-        config (Config): Config object.
-
-    Returns:
-        str: Move string.
-    """
-    visit_counts = [(child.visits_count, move) for move, child in node.children.items()]
-    if game.history_len < config.num_sampling_moves:
-        _, move = _softmax_sample(visit_counts)
+def evaluate(game: Game):
+    if game.terminal():
+        return game.terminal_value(game.to_play()), True
     else:
-        counts_np = np.asarray([count for count, _ in visit_counts])
-        choice = np.random.default_rng().choice(np.argwhere(counts_np == np.max(counts_np)).flatten())
-        _, move = visit_counts[choice]
-    return move
+        return 0, False
+    
+def update(node: Node, value: float):
+    node.N += 1
+    node.W += value
+    node.Q = node.W / node.N
+    if node.parent:
+        update(node.parent, -value)
 
-
-def _softmax_sample(visit_counts: list) -> (int, str):
-    """Creates a softmax distribution from the visit counts and uses it as a probability distribution to select the next move.
-
-    Args:
-        visit_counts (list): List of (visits_count, move).
-
-    Returns:
-        int: Visits count of the selected move.
-        str: Move string.
-    """
-
-    def softmax(x: np.ndarray) -> np.ndarray:
-        return np.exp(x) / np.sum(np.exp(x), axis=0)
-
-    p = softmax(np.asarray(visit_counts).T[0].astype(int))
-    v = np.random.default_rng().choice(len(visit_counts), p=p)
-    return visit_counts[v][0], visit_counts[v][1]
-
-
-def _ucb_score(parent: Node, child: Node, config: Config) -> float:
-    """Calculates the UCB score of the child node.
-
-    Args:
-        parent (Node): Parent node of child.
-        child (Node): Node to calculate UCB score for.
-
-    Returns:
-        float: Calculated UCB score of the child node.
-    """
-    pb_c = (
-        math.log((parent.visits_count + config.pb_c_base + 1) / config.pb_c_base)
-        + config.pb_c_init
+def select_leaf(node: Node, CPUCT = None):
+    _, move, child = max(
+        (ucb(node, child, CPUCT), move, child)
+        for move, child in node.children.items()
     )
-    pb_c *= math.sqrt(parent.visits_count) / (child.visits_count + 1)
-    prior_score = pb_c * child.priority
-    q_value = 0 if child.visits_count == 0 else 1 - ((child.value_sum / child.visits_count) + 1) / 2
-    #value_score = 1 - ((child.value() + 1) / 2)
-    return prior_score + q_value
+    return move, child
+
+def ucb(parent: Node, child: Node, CPUCT = None):
+    # ucb = Q(s, a) + U(s, a)
+    # U(s, a) = C(s)*P(s, a)*sqrt(N(s))/(1 + N(s, a))
+        # Cs -> exploration constant
+        # Psa -> child prior value
+        # Ns -> parent visits count
+        # Nsa -> child visits count
+    # Q(s, a)
+        # Q of child
+    if CPUCT is None: # AlphaZero exploration value, 1 for no exploration
+        CPUCT = (
+            math.log((parent.N + PB_C_BASE + 1) / PB_C_BASE)
+            + PB_C_INIT
+        )
+    return child.Q + CPUCT * child.P * parent.N**0.5 / (child.N + 1)
+
+def select_move(node: Node, rng: np.random.Generator, temp = 0):
+    moves = [move for move in node.children.keys()]
+    visit_counts = [child.N for child in node.children.values()]
+    if temp == 0:
+        # Greedy selection (select the move with the highest visit count) 
+        # If more moves have the same visit count, choose one randomly
+        return moves[rng.choice(np.flatnonzero(visit_counts == np.max(visit_counts)))]
+    else:
+        # Use the visit counts as a probability distribution to select a move
+        pi = np.array(visit_counts) ** (1 / temp)
+        pi /= np.sum(pi)
+        return moves[np.where(rng.multinomial(1, pi) == 1)[0][0]]
 
 
-def _add_exploration_noise(node: Node, config: Config) -> None:
-    """Add dirichlet noise to the root node to encourage exploration on each iteration.
-
-    Args:
-        node (Node): Current root node.
-    """
+def add_exploration_noise(node: Node, rng: np.random.Generator):
     moves = node.children.keys()
-    noise = np.random.default_rng().gamma(config.root_dirichlet_alpha, 1, len(moves))
-    frac = config.root_exploration_fraction
-    for a, n in zip(moves, noise):
-        node.children[a].priority = node.children[a].priority * (1 - frac) + n * frac
+    noise = rng.gamma(ROOT_DIRICHLET_ALPHA, 1, len(moves))
+    frac = ROOT_EXPLORATION_FRACTION
+    for i, move in enumerate(moves):
+        node.children[move].P = node.children[move].P * (1 - frac) + noise[i] * frac

@@ -9,7 +9,7 @@ from keras.layers import (
     LeakyReLU,
     add,
 )
-from keras.optimizers import SGD
+from keras.optimizers import SGD, Adam
 from keras.losses import CategoricalCrossentropy
 from keras.regularizers import l2
 from config import Config
@@ -18,13 +18,13 @@ config = Config()
 
 def _create_residual_block(x):
     skip_connection = x
-    x = Conv2D(filters=config.conv_filters , kernel_size=3, strides=1, padding="same", kernel_regularizer=l2(config.l2_reg))(x)
-    x = BatchNormalization(momentum=config.batch_norm_momentum)(x)
+    x = Conv2D(filters=config.conv_filters , kernel_size=3, strides=1, padding="same", use_bias=False, kernel_regularizer=l2(config.l2_reg))(x)
+    x = BatchNormalization()(x)
     x = LeakyReLU()(x)
-    x = Conv2D(filters=config.conv_filters , kernel_size=3, strides=1, padding="same", kernel_regularizer=l2(config.l2_reg))(x)
-    x = BatchNormalization(momentum=config.batch_norm_momentum)(x)
+    x = Conv2D(filters=config.conv_filters , kernel_size=3, strides=1, padding="same", use_bias=False, kernel_regularizer=l2(config.l2_reg))(x)
+    x = BatchNormalization()(x)
     x = add([skip_connection, x])
-    x = LeakyReLU()(x)
+    x = LeakyReLU()(x) # Swtich this and next line
     return x
 
 def generate_model():
@@ -32,7 +32,7 @@ def generate_model():
     input_layer = Input(shape=config.input_dims, name="input_layer")
 
     # Define the body
-    x = Conv2D(filters=config.conv_filters , kernel_size=3, strides=1, padding="same", kernel_regularizer=l2(config.l2_reg))(input_layer)
+    x = Conv2D(filters=config.conv_filters , kernel_size=3, strides=1, padding="same", use_bias=False, kernel_regularizer=l2(config.l2_reg))(input_layer)
     x = BatchNormalization()(x)
     x = LeakyReLU()(x)
 
@@ -40,24 +40,24 @@ def generate_model():
     for _ in range(config.num_residual_blocks):
         x = _create_residual_block(x)
 
-    value_head = Conv2D(filters=1, kernel_size=1, padding="same", kernel_regularizer=l2(config.l2_reg))(x)
-    value_head = BatchNormalization(momentum=config.batch_norm_momentum)(value_head)
+    value_head = Conv2D(filters=1, kernel_size=1, padding="same", use_bias=False, kernel_regularizer=l2(config.l2_reg))(x)
+    value_head = BatchNormalization()(value_head)
     value_head = LeakyReLU()(value_head)
     value_head = Flatten()(value_head)
-    value_head = Dense(config.conv_filters, kernel_regularizer=l2(config.l2_reg))(value_head)
+    value_head = Dense(config.conv_filters, use_bias=False, kernel_regularizer=l2(config.l2_reg))(value_head)
     value_head = LeakyReLU()(value_head)
-    value_head = Dense(1, activation="tanh", name="value_head", kernel_regularizer=l2(config.l2_reg))(value_head)
+    value_head = Dense(1, use_bias=False, activation="tanh", name="value_head",  kernel_regularizer=l2(config.l2_reg))(value_head)
 
     # Define the policy head and value head
-    policy_head = Conv2D(filters=2, kernel_size=1, padding="same", kernel_regularizer=l2(config.l2_reg))(x)
-    policy_head = BatchNormalization(momentum=config.batch_norm_momentum)(policy_head)
+    policy_head = Conv2D(filters=2, kernel_size=1, padding="same", use_bias=False, kernel_regularizer=l2(config.l2_reg))(x)
+    policy_head = BatchNormalization()(policy_head)
     policy_head = LeakyReLU()(policy_head)
-    policy_head = Conv2D(filters=73, kernel_size=1, padding="same")(policy_head)
     policy_head = Flatten()(policy_head)
-    policy_head = Dense(config.num_actions, activation="linear", name="policy_head")(policy_head)
+    policy_head = Dense(config.num_actions, use_bias=False, activation="linear", kernel_regularizer=l2(config.l2_reg), name="policy_head")(policy_head)
 
 
-    optimizer = SGD(learning_rate=config.learning_rate[0], momentum=config.momentum)
+    optimizer = SGD(learning_rate=config.learning_rate[0], nesterov=True, momentum=config.momentum)
+    #optimizer = Adam(learning_rate=0.01)
 
     # Define the model
     model = Model(inputs=input_layer, outputs=[value_head, policy_head])
@@ -87,4 +87,3 @@ def predict_model(model, image):
     value = predictions[0][0]
     policy_logits = predictions[1][0]
     return value, policy_logits
-

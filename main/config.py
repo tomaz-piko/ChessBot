@@ -1,9 +1,12 @@
+from tensorflow.python.compiler.tensorrt.trt_convert import TrtPrecisionMode
+
 class Config:
     def __init__(self):       
-        self.keras_checkpoint_dir = "checkpoints/keras/"
-        self.trt_checkpoint = "checkpoints/trt/saved_model"
+        self.keras_checkpoint_dir = "checkpoints/keras"
+        self.trt_checkpoint_dir = "checkpoints/trt"
+        self.tensorboard_log_dir = "logs/fit"
 
-        self.trt_precision_mode = "FP32"
+        self.trt_precision_mode = TrtPrecisionMode.FP32
 
         # Game information
         self._N = 8 # board size
@@ -13,31 +16,26 @@ class Config:
         self.num_actions = 4672
 
         # Model information
-        self.conv_filters = 32
-        self.num_residual_blocks = 3 # 19 -> AZ default
+        self.conv_filters = 48
+        self.num_residual_blocks = 4 # 19 -> AZ default
         self.input_dims = (self._N, self._N, self._M * self.T + self._L)
         self.output_dims = (self.num_actions,)
-        self.batch_norm_momentum = 0.6
-        self.l2_reg = 1e-4
-        self.learning_rate = {0: 2e-1, 15: 2e-2, 45: 2e-3, 75: 2e-4}
+        self.l2_reg = 4e-4
+        self.learning_rate = {0: 1e-1, 14000: 1e-2, 28000: 1e-3, 36000: 1e-4}
         self.momentum = 0.9
 
         # MCTS info
-        self.num_mcts_sims = (35, 150)
+        self.num_mcts_sims = (50, 300)
         self.num_mcts_sims_p = 0.25
-        self.num_sampling_moves = 30
-        self.temp = 1.0
-        self.pb_c_base = 19652
-        self.pb_c_init = 1.25
-        self.root_dirichlet_alpha = 0.3
-        self.root_exploration_fraction = 0.25
+        self.num_mcts_sampling_moves = 30
 
         # Training info
         self.max_game_length = 512
-        self.buffer_size = 16384
-        self.batch_size = 512
-        self.training_steps = 100
-        self.checkpoint_interval = 5
+        self.buffer_size = 1024 # Number of positions to store in buffer
+        self.minimum_buffer_size = int(self.buffer_size*(3/4)) # Fill three quarters of buffer before starting training
+        self.batch_size = 64 # Number of positions to sample from buffer
+        self.training_steps = 40000
+        self.checkpoint_interval = 2000
         self.epochs = 1
         self.verbose = 1
         self.use_trt = True
