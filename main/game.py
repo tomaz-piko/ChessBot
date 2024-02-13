@@ -1,9 +1,6 @@
 import chess
 import numpy as np
-import actionspace as asp
-import gameimage as gameimage
-from config import Config
-
+from gameimage import board_to_image
 
 class Game:
     @property
@@ -26,7 +23,7 @@ class Game:
     
     @property
     def outcome_str(self) -> str:
-        if self.outcome is None and self.history_len == self.config.max_game_length:
+        if self.outcome is None and self.history_len == self.max_game_length:
             return "Draw: outcome=Max moves reached"
         if self.outcome.winner == chess.WHITE:
             return f"White wins: outcome={self.outcome.termination.name}"
@@ -35,14 +32,14 @@ class Game:
         else:
             return f"Draw: outcome={self.outcome.termination.name}"
 
-    def __init__(self, config: Config, board: chess.Board = None):
+    def __init__(self, board: chess.Board = None):
         """Constructor for Game class.
 
         Args:
             history (list, optional): _description_. Defaults to None.
         """
         self.board = chess.Board() if board is None else board
-        self.config = config
+        self.max_game_length = 512 
         self.outcome = None
         self.search_statistics = []
 
@@ -52,7 +49,7 @@ class Game:
         Returns:
             bool: True if the game is over, False otherwise.
         """
-        if self.history_len == self.config.max_game_length:
+        if self.history_len == self.max_game_length:
             return True
         if self.board.is_game_over(claim_draw=True):
             self.outcome = self.board.outcome(claim_draw=True)
@@ -84,14 +81,6 @@ class Game:
         """
         return [chess.Move.uci(move) for move in self.board.legal_moves]
 
-    def legal_actions(self) -> list:
-        """Returns a list of legal actions from current position.
-
-        Returns:
-            list: List of legal actions.
-        """
-        return [asp.uci_to_action(move) for move in self.legal_moves()]
-
     def make_move(self, move: str) -> None:
         """Makes a move on the board.
 
@@ -121,12 +110,12 @@ class Game:
             np.ndarray: Image representation of the board.
         """
         if state_index == -1:
-            return gameimage.board_to_image(self.board, self.config.T).astype(np.int16)
+            return board_to_image(self.board,).astype(np.int16)
         else:
             tmp_board = self.board.copy()
             while len(tmp_board.move_stack) > state_index:
                 tmp_board.pop()
-            return gameimage.board_to_image(tmp_board, self.config.T).astype(np.int16)
+            return board_to_image(tmp_board).astype(np.int16)
 
     def clone(self) -> "Game":
         """Returns a copy of the game.
@@ -134,7 +123,7 @@ class Game:
         Returns:
             Game: Copy of the game.
         """
-        return Game(config=self.config, board=self.board.copy())
+        return Game(board=self.board.copy())
 
     def to_play(self) -> bool:
         """Returns the current player.
@@ -144,7 +133,7 @@ class Game:
         """
         return self.board.turn
     
-    def make_image_sample(config: Config):
+    def make_image_sample():
         """Returns an image sample of the board.
 
         Returns:
@@ -154,4 +143,4 @@ class Game:
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        return gameimage.board_to_image(board, config.T).astype(np.int16)
+        return board_to_image(board).astype(np.int16)

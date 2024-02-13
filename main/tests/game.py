@@ -2,33 +2,29 @@ import unittest
 from game import Game
 import chess
 import random
-import numpy as np
-from config import Config
-
-config = Config()
 
 class TestGame(unittest.TestCase):
     def test_empty_game(self):
-        game = Game(config=config)
+        game = Game()
         self.assertEqual(game.history, [])
 
     def test_imported_game(self):
         board = chess.Board()
         board.push_san("e4")
         board.push_san("e5")
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertEqual(game.history, ['e2e4', 'e7e5'])
 
     # Fen import does not include past moves
     def test_imported_game2(self):
         board = chess.Board(fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertEqual(game.history, [])
 
     def test_history_length(self):
         # Decide on a random number of moves to be played
         num_moves = random.randint(1, 32)
-        game = Game(config=config)
+        game = Game()
         for _ in range(num_moves):
             game.make_move(random.choice(game.legal_moves()))
         self.assertEqual(game.history_len, num_moves)
@@ -39,7 +35,7 @@ class TestGame(unittest.TestCase):
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        game = Game(config=config)
+        game = Game()
         self.assertFalse(game.terminal())
 
     # Scholars mate success
@@ -48,7 +44,7 @@ class TestGame(unittest.TestCase):
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertTrue(game.terminal())
 
     # If current player wins return 1.0
@@ -58,7 +54,7 @@ class TestGame(unittest.TestCase):
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertTrue(game.terminal())
         self.assertEqual(game.terminal_value(player), 1.0)
         self.assertEqual(game.terminal_value(not player), -1.0)
@@ -70,7 +66,7 @@ class TestGame(unittest.TestCase):
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertTrue(game.terminal())
         self.assertEqual(game.terminal_value(player), -1.0)
         self.assertEqual(game.terminal_value(not player), 1.0)
@@ -81,7 +77,7 @@ class TestGame(unittest.TestCase):
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertTrue(game.terminal())
         self.assertEqual(game.terminal_value(player), 1.0)
 
@@ -92,7 +88,7 @@ class TestGame(unittest.TestCase):
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertTrue(game.terminal())
         self.assertEqual(game.terminal_value(player), -1.0)
 
@@ -103,7 +99,7 @@ class TestGame(unittest.TestCase):
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertFalse(game.terminal())
         self.assertEqual(game.terminal_value(player), 0.0)
 
@@ -113,12 +109,12 @@ class TestGame(unittest.TestCase):
         board = chess.Board()
         for move in moves:
             board.push_san(move)
-        game = Game(board=board, config=config)
+        game = Game(board=board)
         self.assertFalse(game.terminal())
         self.assertEqual(game.terminal_value(player), 0.0)
 
     def test_copy(self):
-        game = Game(config=config)
+        game = Game()
         game.make_move(random.choice(game.legal_moves()))
         game_copy = game.clone()
         self.assertEqual(game.history, game_copy.history)

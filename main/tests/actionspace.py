@@ -1,5 +1,5 @@
 import unittest
-import actionspace as asp
+import actionspace.mapper as asp
 import chess
 
 class TestActionSpace(unittest.TestCase):

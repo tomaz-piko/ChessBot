@@ -3,7 +3,12 @@
 /models
 **/__pycache__
 .vscode
-main/checkpoints
-main/models
+**/checkpoints
+**/models
 main/puzzles
-main/logs
+**/data/**
+**/build
+**/logs
+*.c
+*.html
+*.so

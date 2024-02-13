@@ -113,7 +113,7 @@ promotions_dict = {
 }
 
 
-def uci_to_action(uci: str, player: bool) -> (bool, int):
+def uci_to_action(uci: str, player: bool):
     """Converts a UCI string to an action index
 
     Args:
@@ -180,7 +180,7 @@ def uci_to_action(uci: str, player: bool) -> (bool, int):
     return None
 
 
-def uci_to_actionstr(uci: str, player: bool) -> (bool, str):
+def uci_to_actionstr(uci: str, player: bool):
     """Converts a UCI string to an action string
 
     Args:
