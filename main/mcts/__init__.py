@@ -1,8 +1,8 @@
 import numpy as np
 from actionspace import map_w, map_b
 from game import Game
-from gameimage import c as gic
-from funcs import predict_fn
+from gameimage import board_to_image, update_image
+from tf_funcs import predict_fn
 from math import log, exp
 import chess
 
@@ -40,7 +40,7 @@ class Node:
         self.Q = 0
 
 
-def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = False, num_simulations: int = 100, num_sampling_moves: int = 30, add_noise: bool = True, cpuct: float = None):
+def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = False, num_simulations: int = 100, num_sampling_moves: int = 30, add_noise: bool = True, pb_c_factor: float = None):
     """Run Monte Carlo Tree Search algorithm from the current game state.
 
     Args:
@@ -51,6 +51,8 @@ def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = 
         Move, Root: Return the move to play and the root node with an updated tree layout.
     """
     rng = np.random.default_rng()
+    if pb_c_factor is None:
+        pb_c_factor = config.pb_c_factor
 
     # Initialize the root node
     # Allows us to reuse the image of the previous root node but also allows us to reuse the tree or make clean start
@@ -70,6 +72,7 @@ def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = 
     if add_noise:
         add_exploration_noise(config, root, rng)
 
+
     # Run the simulations
     for _ in range(num_simulations):
         node = root
@@ -77,7 +80,7 @@ def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = 
 
         # Select the best leaf node
         while node.is_leaf() is False:
-            move, node = select_leaf(config, node, cpuct)  # Select best with ucb
+            move, node = select_leaf(config, node, pb_c_factor)  # Select best with ucb
             tmp_game.make_move(move)
 
         # Evaluate the leaf node
@@ -96,13 +99,13 @@ def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = 
 def get_image(game: Game, node: Node):
     if node.parent is None: # Root node
         if node.image is None:
-            node.image = gic.board_to_image(game.board)
+            node.image = board_to_image(game.board)
         return node.image
     else:
         if node.parent.image is None:
-            node.image = gic.board_to_image(game.board)
+            node.image = board_to_image(game.board)
         else:
-            node.image = gic.update_image(game.board, node.parent.image)
+            node.image = update_image(game.board, node.parent.image.copy())
         return node.image
 
 def expand(node: Node, game: Game, network=None):
@@ -135,7 +138,7 @@ def expand(node: Node, game: Game, network=None):
     return value
 
 def evaluate(game: Game):
-    if game.terminal():
+    if game.terminal_with_outcome():
         return game.terminal_value(game.to_play()), True
     else:
         return 0, False
@@ -144,17 +147,17 @@ def update(node: Node, value: float):
     node.N += 1
     node.W += value
     node.Q = node.W / node.N
-    if not node.parent.parent is None:
+    if not node.parent is None:
         update(node.parent, -value)
 
-def select_leaf(config, node: Node, cpuct = None):
+def select_leaf(config, node: Node, pb_c_factor):
     _, move, child = max(
-        (ucb(config, node, child, cpuct), move, child)
+        (ucb(config, node, child, pb_c_factor), move, child)
         for move, child in node.children.items()
     )
     return move, child
 
-def ucb(config, parent: Node, child: Node, cpuct = None):
+def ucb(config, parent: Node, child: Node, pb_c_factor):
     # ucb = Q(s, a) + U(s, a)
     # U(s, a) = C(s)*P(s, a)*sqrt(N(s))/(1 + N(s, a))
         # Cs -> exploration constant
@@ -163,11 +166,12 @@ def ucb(config, parent: Node, child: Node, cpuct = None):
         # Nsa -> child visits count
     # Q(s, a)
         # Q of child
-    if cpuct is None: # AlphaZero exploration value, 1 for no exploration
-        cpuct = (
-            log((parent.N + config.pb_c_base + 1) / config.pb_c_base)
-            + config.pb_c_init
-        )
+    if pb_c_factor == 0.0:
+        return child.Q
+    cpuct = (
+        log((parent.N + config.pb_c_base + 1) / config.pb_c_base)
+        + config.pb_c_init
+    ) * pb_c_factor
     return child.Q + cpuct * child.P * parent.N**0.5 / (child.N + 1)
 
 def select_move(node: Node, rng: np.random.Generator, temp = 0):

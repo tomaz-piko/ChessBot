@@ -1,5 +1,6 @@
 import unittest
 import actionspace.mapper as asp
+from actionspace import map_w, map_b
 import chess
 
 class TestActionSpace(unittest.TestCase):
@@ -365,5 +366,68 @@ class TestActionSpace(unittest.TestCase):
         self.assertEqual(action_str, "Q,NE,1")
         action_str = asp.uci_to_actionstr("d2e1q", chess.BLACK)
         self.assertEqual(action_str, "Q,NW,1")
+
+    def test_samemove_idx_different_colors(self):
+
+        # . . . . . . . .   1  
+        # . . . . . . . .   2
+        # . . . . . . . .   3
+        # . . . . . . . .   4
+        # . . . . . . . .   5
+        # . . . . . . . .   6
+        # p . . . . . . .   7
+        # . . . . . . . .   8
+        # h g f e d c b a
+
+        # . . . . . . . .   8
+        # . . . . . . . .   7
+        # . . . . . . . .   6
+        # . . . . . . . .   5
+        # . . . . . . . .   4
+        # . . . . . . . .   3
+        # P . . . . . . .   2
+        # . . . . . . . .   1
+        # a b c d e f g h
+
+        # The following board is presumed for the following tests: (Testing same move index for different colors). 
+        # both moves are from the same square (when board is flipped).
+        # Both moves are queen move 1 square north (Q,N,1)
+        action_str_w = asp.uci_to_actionstr("a2a3", chess.WHITE)
+        action_str_b = asp.uci_to_actionstr("h7h6", chess.BLACK)
+        self.assertEqual(action_str_w, "Q,N,1")
+        self.assertEqual(action_str_b, "Q,N,1")
+        self.assertEqual(map_w["a2a3"], map_b["h7h6"])
+
+    def test_samemove_idx_different_colors2(self):
+
+        # . . . . . . . .   1  
+        # . . . . . . . .   2
+        # . . q . . . . .   3
+        # . . . . . . . .   4
+        # . . . . . . . .   5
+        # . . . . . . . .   6
+        # . . . . . . . .   7
+        # . . . . . . . .   8
+        # h g f e d c b a
+
+        # . . . . . . . .   8
+        # . . . . . . . .   7
+        # . . q . . . . .   6
+        # . . . . . . . .   5
+        # . . . . . . . .   4
+        # . . . . . . . .   3
+        # . . . . . . . .   2
+        # . . . . . . . .   1
+        # a b c d e f g h
+
+        # The following board is presumed for the following tests: (Testing same move index for different colors). 
+        # both moves are from the same square (when board is flipped).
+        # Both moves are queen move 1 square north (Q,N,1)
+        action_str_w = asp.uci_to_actionstr("c6g2", chess.WHITE)
+        action_str_b = asp.uci_to_actionstr("f3b7", chess.BLACK)
+        self.assertEqual(action_str_w, "Q,SE,4")
+        self.assertEqual(action_str_b, "Q,SE,4")
+        self.assertEqual(map_w["a2a3"], map_b["h7h6"])
+
 if __name__ == '__main__':
     unittest.main()

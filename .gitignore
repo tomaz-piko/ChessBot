@@ -12,3 +12,4 @@ main/puzzles
 *.c
 *.html
 *.so
+*/cppchess/src

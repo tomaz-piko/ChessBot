@@ -1,6 +1,7 @@
 import unittest
 import gameimage.c as gic
-import chess
+#import chess
+import cppchess as chess
 import numpy as np
 
 # Ruy lopez opening from whites perspective
@@ -2582,7 +2583,7 @@ class TestGameImageC(unittest.TestCase):
         board = ruy_lopez.copy()
         move = board.pop()
         image = gic.board_to_image(board)
-        board.push(move)
+        board.push_uci(move.uci())
         image_c = gic.board_to_image(board)
         image_t = gic.update_image(board, image)
         for i in range(119):
@@ -2592,7 +2593,7 @@ class TestGameImageC(unittest.TestCase):
         board = ruy_lopez2.copy()
         move = board.pop()
         image = gic.board_to_image(board)
-        board.push(move)
+        board.push_uci(move.uci())
         image_c = gic.board_to_image(board)
         image_t = gic.update_image(board, image)
         for i in range(119):

@@ -1,6 +1,24 @@
-import chess
 import numpy as np
-from gameimage import board_to_image
+import cppchess as chess
+from gameimage.c import board_to_image
+
+def _termination_str(termination: int) -> str:
+    if termination == 0:
+        return "Checkmate"
+    elif termination == 1:
+        return "Stalemate"
+    elif termination == 2:
+        return "Insufficient material"
+    elif termination == 3:
+        return "Seventyfive moves"
+    elif termination == 4:
+        return "Fivefold repetition"
+    elif termination == 5:
+        return "Fifty moves"
+    elif termination == 6:
+        return "Threefold repetition"
+    else:
+        return "Unknown"
 
 class Game:
     @property
@@ -10,7 +28,7 @@ class Game:
         Returns:
             list: List of moves.
         """
-        return [chess.Move.uci(move) for move in self.board.move_stack]
+        return [move.uci() for move in self.board.move_stack]
 
     @property
     def history_len(self) -> int:
@@ -19,26 +37,26 @@ class Game:
         Returns:
             int: Length of the game history.
         """
-        return len(self.board.move_stack)
+        return self.board.ply()
     
     @property
     def outcome_str(self) -> str:
         if self.outcome is None and self.history_len == self.max_game_length:
             return "Draw: outcome=Max moves reached"
-        if self.outcome.winner == chess.WHITE:
-            return f"White wins: outcome={self.outcome.termination.name}"
-        elif self.outcome.winner == chess.BLACK:
-            return f"Black wins: outcome={self.outcome.termination.name}"
+        if self.outcome.winner == True: # True is white
+            return f"White wins: outcome={_termination_str(self.outcome.termination)}"
+        elif self.outcome.winner == False: # False is black
+            return f"Black wins: outcome={_termination_str(self.outcome.termination)}"
         else:
-            return f"Draw: outcome={self.outcome.termination.name}"
+            return f"Draw: outcome={_termination_str(self.outcome.termination)}"
 
-    def __init__(self, board: chess.Board = None):
+    def __init__(self, board):
         """Constructor for Game class.
 
         Args:
             history (list, optional): _description_. Defaults to None.
         """
-        self.board = chess.Board() if board is None else board
+        self.board = board
         self.max_game_length = 512 
         self.outcome = None
         self.search_statistics = []
@@ -49,11 +67,25 @@ class Game:
         Returns:
             bool: True if the game is over, False otherwise.
         """
-        if self.history_len == self.max_game_length:
+        if self.board.ply() >= self.max_game_length:
             return True
         if self.board.is_game_over(claim_draw=True):
-            self.outcome = self.board.outcome(claim_draw=True)
             return True
+        return False
+    
+    def terminal_with_outcome(self) -> bool:
+        """Checks if the game is over. And sets the outcome.
+
+        Returns:
+            bool: True if the game is over, False otherwise.
+        """
+        if self.board.ply() >= self.max_game_length:
+            return True
+        outcome = self.board.outcome(claim_draw=True)
+        if outcome is not None:
+            self.outcome = outcome
+            return True
+        return False
 
     def terminal_value(self, player: bool) -> int:
         """Returns the value of the terminal state.
@@ -79,7 +111,7 @@ class Game:
         Returns:
             list: List of legal moves.
         """
-        return [chess.Move.uci(move) for move in self.board.legal_moves]
+        return [move.uci() for move in self.board.legal_moves]
 
     def make_move(self, move: str) -> None:
         """Makes a move on the board.
@@ -88,34 +120,6 @@ class Game:
             move (str): Move to make.
         """
         self.board.push_uci(move)
-
-    def make_target(self, state_index: int) -> tuple:
-        """Returns the target for the state.
-        The target consists of the child visit counts and the value of the terminal state.
-
-        Args:
-            state_index (int): Index of the consecutive game move we want to retrieve the target.
-        """
-        index = self.history_len - 1 if state_index == -1 else state_index
-        to_play = chess.WHITE if index % 2 == 0 else chess.BLACK
-        return (
-            np.array(self._search_statistics[state_index]),
-            self.terminal_value(to_play),
-        )
-
-    def make_image(self, state_index: int = -1) -> np.ndarray:
-        """Returns an image representation of the board.
-
-        Returns:
-            np.ndarray: Image representation of the board.
-        """
-        if state_index == -1:
-            return board_to_image(self.board,).astype(np.int16)
-        else:
-            tmp_board = self.board.copy()
-            while len(tmp_board.move_stack) > state_index:
-                tmp_board.pop()
-            return board_to_image(tmp_board).astype(np.int16)
 
     def clone(self) -> "Game":
         """Returns a copy of the game.
@@ -133,14 +137,15 @@ class Game:
         """
         return self.board.turn
     
-    def make_image_sample():
-        """Returns an image sample of the board.
+    @staticmethod
+    def image_sample():
+        """Returns a game position of of Ruy Lopez opening.
 
         Returns:
-            np.ndarray: Image sample of the board.
+            NpArray: Game position of Ruy Lopez opening.
         """
-        moves = ["e4", "e5", "Nf3", "Nc6"]
         board = chess.Board()
+        moves = ["e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Ba4", "Nf6"]
         for move in moves:
             board.push_san(move)
-        return board_to_image(board).astype(np.int16)
+        return board_to_image(board)

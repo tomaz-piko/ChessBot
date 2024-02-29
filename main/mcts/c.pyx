@@ -1,10 +1,10 @@
-from game import Game
-import chess
 import numpy as np
+from game import Game
 from actionspace import map_w, map_b
-import main.gameimage.c as gic
-from funcs import predict_fn
+from tf_funcs import predict_fn
+from time import time
 cimport numpy as np
+from gameimage.c cimport board_to_image, update_image
 from libc.math cimport log, exp
 np.import_array()
 
@@ -33,17 +33,29 @@ class Node:
         self.Q = 0
 
 
-def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = False, num_simulations: int = 100, num_sampling_moves: int = 30, add_noise: bool = True, pb_c_factor: float = 2.0):
+def run_mcts(config, 
+            game: Game, 
+            network, 
+            root: Node = None, 
+            reuse_tree: bool = False, 
+            num_simulations: int = 100, 
+            num_sampling_moves: int = 30, 
+            add_noise: bool = True,
+            pb_c_factor: float = None,
+            ):
+
     rng = np.random.default_rng()
     pb_c_base = config.pb_c_base
     pb_c_init = config.pb_c_init
+    if pb_c_factor is None:
+        pb_c_factor = config.pb_c_factor
 
     # Initialize the root node
     # Allows us to reuse the image of the previous root node but also allows us to reuse the tree or make clean start
     if root is None:
         root = Node()
         root.N = 1
-        _, policy_logits = make_predictions(root, game, network)
+        _, policy_logits = make_prediction(root, game, network)
         expand(root, game, policy_logits)
     else:
         if reuse_tree:
@@ -51,7 +63,7 @@ def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = 
         else:
             root.reset()
             root.N = 1
-            _, policy_logits = make_predictions(root, game, network)
+            _, policy_logits = make_prediction(root, game, network)
             expand(root, game, policy_logits)
 
     # Exploration noise used for full searches
@@ -73,7 +85,7 @@ def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = 
 
         # Expand if possible
         if is_terminal is False:
-            value, policy_logits = make_predictions(node, tmp_game, network)
+            value, policy_logits = make_prediction(node, tmp_game, network)
             expand(node, tmp_game, policy_logits)
         
         # Backpropagate the value
@@ -85,21 +97,19 @@ def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = 
 def get_image(node: Node, game: Game):
     if node.parent is None: # Root node
         if node.image is None:
-            node.image = gic.board_to_image(game.board)
+            node.image = board_to_image(game.board)
         return node.image
     else:
         if node.parent.image is None:
-            node.image = gic.board_to_image(game.board)
+            node.image = board_to_image(game.board)
         else:
-            node.image = gic.update_image(game.board, node.parent.image)
+            node.image = update_image(game.board, node.parent.image.copy())
         return node.image
 
-def make_predictions(node: Node, game: Game, network):
+def make_prediction(node: Node, game: Game, network):
     image = get_image(node, game)
     value, policy_logits = predict_fn(network, image.astype(np.float32))
-    value = np.array(value)
-    policy_logits = np.array(policy_logits)
-    return value, policy_logits
+    return np.array(value), np.array(policy_logits)
 
 cdef expand(object node, object game, float[:] policy_logits):
     cdef dict policy = {}
@@ -108,10 +118,10 @@ cdef expand(object node, object game, float[:] policy_logits):
     cdef str move_uci
     cdef int action
     cdef double p
-    cdef double policy_sum = 0
+    cdef long double policy_sum = 0.0
 
     for move in game.board.legal_moves: # Acces via generator for speedup
-        move_uci = chess.Move.uci(move)
+        move_uci = move.uci()
         action = map_w[move_uci] if to_play else map_b[move_uci]
         p = exp(policy_logits[action])
         policy[move_uci] = p 
@@ -124,7 +134,7 @@ cdef expand(object node, object game, float[:] policy_logits):
         node.children[move_uci] = child
 
 def evaluate(game: Game):
-    if game.terminal():
+    if game.terminal_with_outcome():
         return game.terminal_value(game.to_play()), True
     else:
         return 0, False
@@ -133,7 +143,7 @@ def update(node: Node, value: float):
     node.N += 1
     node.W += value
     node.Q = node.W / node.N
-    if not node.parent.parent is None:
+    if not node.parent is None:
         update(node.parent, -value)
 
 cdef select_leaf(object node, float pb_c_base, float pb_c_init, float pb_c_factor):

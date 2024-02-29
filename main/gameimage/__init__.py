@@ -1,4 +1,3 @@
-import chess
 import numpy as np
 
 N = 8
@@ -31,7 +30,7 @@ def pieces_onehot(board_np: np.ndarray, to_play: bool):
     else: # If player one is black -> flip perspective
         return np.flip(np.flip(onehot_b, axis=0), axis=1), np.flip(np.flip(onehot_w, axis=0), axis=1)
 
-def board_to_image(board: chess.Board):
+def board_to_image(board):
     image = np.zeros(image_shape, dtype=np.int16)
     current_player = board.turn
     tmp = board.copy()
@@ -58,12 +57,13 @@ def board_to_image(board: chess.Board):
     image[:, :, 118] = int(board.has_queenside_castling_rights(not current_player))
     return image
 
-def update_image(board: chess.Board, prev_image: np.ndarray):
+def update_image(board, prev_image: np.ndarray):
     new_image = np.zeros(image_shape, dtype=np.int16)
     
     # Copy previous time steps
     flipped = np.flip(np.flip(prev_image, axis=0), axis=1)
-    flipped = np.roll(flipped, -14) # Roll back for one timestep
+    #flipped = np.roll(flipped, -14) # Roll back for one timestep
+    flipped[:, :, 0:98] = flipped[:, :, 14:112]
     for t in range(T - 1):
         _from = (t * M)
         _to = (t * M) + 6

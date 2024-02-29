@@ -1,7 +1,7 @@
-import chess
 import numpy as np
 cimport numpy as np
 cimport cython
+from cython.parallel import prange
 np.import_array()
 
 DTYPE = np.intc
@@ -9,7 +9,7 @@ ctypedef int DTYPE_t
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef parse_piece_map(dict pieces_map):
+cdef parse_piece_map(pieces_map):
     cdef int N = 8
     cdef Py_ssize_t row, col
     cdef int idx
@@ -20,7 +20,7 @@ cdef parse_piece_map(dict pieces_map):
         "P": 1, "N": 2, "B": 3, "R": 4, "Q": 5, "K": 6
     }
 
-    for idx, piece in pieces_map.items():
+    for idx, piece in pieces_map:
         row = idx // 8
         col = idx % 8
         board_np_view[N - row - 1, col] = pieces[piece.symbol()]
@@ -40,9 +40,9 @@ cdef pieces_onehot(int[:,:] board_np_view, bint to_play):
     cdef Py_ssize_t i, j, p
     cdef Py_ssize_t _P = 6
     
-    for i in range(N):
-        for j in range(N):
-            for p in range(_P):      
+    for p in range(_P):  
+        for i in range(N):
+            for j in range(N):    
                 if board_np_view[i, j] == p + 1:
                     onehot_w_view[i, j, p] = 1
                 elif board_np_view[i, j] == -(p + 1):
@@ -56,7 +56,7 @@ cdef pieces_onehot(int[:,:] board_np_view, bint to_play):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def board_to_image(board: chess.Board):
+cpdef board_to_image(board):
     cdef int N = 8
     cdef int T = 8
     cdef int M = 14
@@ -103,7 +103,7 @@ cdef copy_history(np.ndarray[DTYPE_t, ndim=3] new_image, np.ndarray[DTYPE_t, ndi
 
     tmp = np.flip(prev_image, axis=0)
     tmp = np.flip(tmp, axis=1)
-    tmp = np.roll(tmp, shift=-M)
+    tmp[:, :, 0:98] = tmp[:, :, 14:112]
     for t in range(T):
         _from1 = (t * M)
         _from2 = (t * M) + 6
@@ -116,7 +116,7 @@ cdef copy_history(np.ndarray[DTYPE_t, ndim=3] new_image, np.ndarray[DTYPE_t, ndi
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def update_image(board, prev_image):
+cpdef update_image(board, prev_image):
     cdef int N = 8
     cdef int T = 8
     cdef int M = 14
@@ -144,5 +144,4 @@ def update_image(board, prev_image):
     new_image[:, :, 116] = int(board.has_queenside_castling_rights(current_player))
     new_image[:, :, 117] = int(board.has_kingside_castling_rights(not current_player))
     new_image[:, :, 118] = int(board.has_queenside_castling_rights(not current_player))
-    
     return new_image

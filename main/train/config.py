@@ -8,27 +8,28 @@ class TrainingConfig:
         self.num_actions = 4672
 
         # Model info
-        self.conv_filters = 48
-        self.num_residual_blocks = 4
+        self.conv_filters = 64
+        self.num_residual_blocks = 6
         self.output_dims = (self.num_actions,)
 
         # Model compilation info
-        self.l2_reg = 1e-5
+        self.l2_reg = 1e-4
         self.optimizer = "Adam"
         self.adam_args = {
             "learning_rate": 0.003125
         }
         self.sgd_args = {
-            "learning_rate": {}, # {step: learning_rate}
+            "learning_rate": {0: 3.125e-3, 350: 3.125e-4, 850: 3.125e-5}, # {epoch: learning_rate} epoch != step
             "momentum": 0.9,
-            "nesterov": True
+            "nesterov": False
         }
+        self.model_mixed_precision = False
 
         # Self-play info
         self.max_game_length = 512
         self.num_mcts_sims = (100, 600)
         self.num_mcts_sampling_moves = 30
-        self.pb_c_factor = (0.0, 2.0) # 0 on minimal search
+        self.pb_c_factor = (0.0, 1.5) # 0 on minimal search
         self.playout_cap_random_p = 0.25
 
         # MCTS constants
@@ -39,15 +40,16 @@ class TrainingConfig:
         self.root_exploration_fraction = 0.25
 
         # Training info
-        self.num_actors = 4
-        self.num_steps = 5
-        self.games_per_step = 100 # if avg length is 100, 50 games is 5000 samples * 0.25 (playout cap randomization) = 1250 samples
+        self.num_actors = 2
+        self.num_steps = 100
+        self.games_per_step = 100 #50 # if avg length is 60, 100 games is 6000 samples * 0.25 (playout cap randomization) = 1500 samples * 6 (max trains per sample) = 9000 training samples
         self.batch_size = 64
-        self.min_samples_for_training = self.batch_size * 20 # 1280
-        self.max_samples_per_step = self.min_samples_for_training * 5 # 6400
-        self.keep_records_num = 10
-        self.max_trains_per_sample = 8 # To prevent overfitting
-        self.checkpoint_interval = 5 # Every 5 steps generate new model
+        self.min_samples_for_training = self.batch_size * 12 # 768
+        self.max_samples_per_step = self.min_samples_for_training * 10 # 7680
+        self.keep_records_num = 5
+        self.max_trains_per_sample = 6 # To prevent overfitting
+        self.delete_sample_after_num_trains = 4 # Delete sample after 4 trains
+        self.checkpoint_interval = 2 # Every 2 steps generate new model
 
         # Save directories
         self.self_play_positions_dir = f"{current_dir}/data/positions"
@@ -56,6 +58,7 @@ class TrainingConfig:
         self.keras_checkpoint_dir = f"{current_dir}/checkpoints/keras"
         self.trt_checkpoint_dir = f"{current_dir}/checkpoints/trt"
         self.positions_usage_stats = f"{current_dir}/data/positions_usage_counts.pkl"
+        self.training_info_stats = f"{current_dir}/data/training_info.json"
 
         # TRT and GPU info
         self.allow_gpu_growth = True

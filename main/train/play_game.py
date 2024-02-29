@@ -2,6 +2,8 @@ from game import Game
 from .config import TrainingConfig
 from actionspace import map_w, map_b
 import numpy as np
+import cppchess as chess
+from mcts.c import run_mcts
 
 def calc_search_statistics(config: TrainingConfig, root, to_play):
     sum_visits = sum([child.N for child in root.children.values()])
@@ -12,12 +14,11 @@ def calc_search_statistics(config: TrainingConfig, root, to_play):
     return child_visits
 
 def play_game(config, trt_func):
-    from mcts.c import run_mcts
-    game = Game()
+    game = Game(chess.Board())
     search_statistics, images, player_on_turn = [], [], []
     was_full_search = True
     root = None
-    while not game.terminal():
+    while not game.terminal_with_outcome():
         # Playout cap randomization
         do_full_search = True if np.random.default_rng().random() < config.playout_cap_random_p else False
         num_simulations = config.num_mcts_sims[1] if do_full_search else config.num_mcts_sims[0]

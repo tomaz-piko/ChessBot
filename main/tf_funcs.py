@@ -17,3 +17,10 @@ def predict_model(model, image):
     value = predictions[0][0]
     policy_logits = predictions[1][0]
     return value, policy_logits
+
+def fake_network(_):
+    tf.random.set_seed(0)
+    return {
+        "value_head": tf.random.uniform([1, 1], -1, 1),
+        "policy_head": tf.random.uniform([1, 4672], 0, 1),
+    }

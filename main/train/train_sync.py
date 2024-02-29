@@ -2,13 +2,22 @@ from .config import TrainingConfig
 from .play_game import play_game
 import numpy as np
 from time import time
-from multiprocessing import Process, Event, Manager, Value
+from multiprocessing import Process, Event, Manager, BoundedSemaphore
 from datetime import datetime
 import pickle
+import json
 import os
 import sys
+from functools import partial
+from game import Game
 
-def play_n_games(pid, config, games_count):
+def lr_scheduler(epoch, lr):
+    config = TrainingConfig()
+    if epoch in config.sgd_args["learning_rate"]:
+        return config.sgd_args["learning_rate"][epoch]
+    return lr
+
+def play_n_games(pid, model_init_semahpor, config, games_count):
     import tensorflow as tf
     if config.allow_gpu_growth:
         gpu_devices = tf.config.experimental.list_physical_devices('GPU')
@@ -18,8 +27,13 @@ def play_n_games(pid, config, games_count):
     models = os.listdir(config.trt_checkpoint_dir)
     models.sort()
     latest = models[-1]
-    model = tf.saved_model.load(f"{config.trt_checkpoint_dir}/{latest}/saved_model")
-    trt_func = model.signatures['serving_default']
+    with model_init_semahpor:
+        model = tf.saved_model.load(f"{config.trt_checkpoint_dir}/{latest}/saved_model")
+        trt_func = model.signatures['serving_default']
+        image = Game.image_sample().astype(np.float32)
+        image = tf.expand_dims(image, axis=0)
+        image = tf.convert_to_tensor(image, dtype=tf.float32)
+        _ = trt_func(image)
 
     # Play games until GAMES_PER_CYCLE reached for all processes combined
     current_game = 0
@@ -43,9 +57,10 @@ def self_play(config):
     processes = {}
     with Manager() as manager:
         games_count = manager.Value('i', 0)
+        model_init_semaphor = manager.BoundedSemaphore(1) # One model being built at a time
 
         for pid in range(config.num_actors):
-            p = Process(target=play_n_games, args=(pid, config, games_count,))
+            p = Process(target=play_n_games, args=(pid, model_init_semaphor, config, games_count,))
             p.start()
             processes[pid] = p
 
@@ -98,13 +113,12 @@ def prepare_data(config, allow_training):
     records = os.listdir(config.training_records_dir)
     records.sort()
     while len(records) > config.keep_records_num:
-        print(f"Removing {records[0]}.")
         os.remove(f"{config.training_records_dir}/{records.pop(0)}")
     
     # Clean up overused positions
     to_delete = []
     for position, count in positions_usage_counts.items():
-        if count > config.max_trains_per_sample:
+        if count >= config.delete_sample_after_num_trains:
             to_delete.append(position)
     for position in to_delete:
         os.remove(f"{config.self_play_positions_dir}/{position}")
@@ -115,56 +129,88 @@ def prepare_data(config, allow_training):
     allow_training.set()
     
 
-def train(config, current_epoch):
+def train(config, current_step):
     import tensorflow as tf
-    def _parse_function(example_proto):
+    def read_tfrecord(example_proto):
         feature_description = {
             "image": tf.io.FixedLenFeature([8, 8, 119], tf.float32),
             "value_head": tf.io.FixedLenFeature([1], tf.float32),
             "policy_head": tf.io.FixedLenFeature([4672], tf.float32),
         }
-        return tf.io.parse_single_example(example_proto, feature_description)
+        example_proto = tf.io.parse_single_example(example_proto, feature_description)
+        return example_proto["image"], (example_proto["value_head"], example_proto["policy_head"])
     
-    def get_dataset(filenames, batch_size):
-        dataset = (
-            tf.data.TFRecordDataset(filenames, num_parallel_reads=4)
-            .map(_parse_function, num_parallel_calls=tf.data.AUTOTUNE)
-            .map(prepare_sample, num_parallel_calls=tf.data.AUTOTUNE)
-            .batch(batch_size)
-        )
+    def load_dataset(filenames):
+        ignore_order = tf.data.Options()
+        ignore_order.experimental_deterministic = False  # disable order, increase speed
+        dataset = tf.data.TFRecordDataset(filenames)  # automatically interleaves reads from multiple files
+        dataset = dataset.with_options(ignore_order)  # uses data as soon as it streams in, rather than in its original order
+        dataset = dataset.map(partial(read_tfrecord), num_parallel_calls=tf.data.AUTOTUNE)
         return dataset
     
-    def prepare_sample(features):
-        return features["image"], (features["value_head"], features["policy_head"])
-
+    def get_dataset(filenames, batch_size):
+        dataset = load_dataset(filenames)
+        dataset = dataset.shuffle(buffer_size=2048)
+        dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+        dataset = dataset.batch(batch_size)
+        return dataset
+    
     checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
             filepath=f"{config.keras_checkpoint_dir}/checkpoint.model.keras",
-            verbose=1,
+            verbose=0,
         )
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=config.tensorboard_log_dir, histogram_freq=1)
+    callbacks = [checkpoint_callback, tensorboard_callback]
+    if config.optimizer == "SGD":
+        lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
+        callbacks.append(lr_callback)
 
     # Get latest record file
     records = os.listdir(config.training_records_dir)
     records.sort()
     latest_record = records[-1]
     
-    num_samples = int(latest_record.split("-")[1].split(".")[0]) # Will always be a multiple of MIN_SAMPLES_FOR_TRAINING (but less than MAX_SAMPLES_PER_STEP)
+    num_samples = int(latest_record.split("-")[1].split(".")[0]) # Will always be a multiple of MIN_SAMPLES_FOR_TRAINING (but less/equal than MAX_SAMPLES_PER_STEP)
     num_epochs = int(num_samples / config.min_samples_for_training)
     steps_per_epoch = int(config.min_samples_for_training / config.batch_size)
+
+    if os.path.exists(config.training_info_stats):
+        with open(config.training_info_stats, "rb") as f:
+            training_info_stats = json.load(f)
+    else:
+        training_info_stats = {
+            "current_epoch": 0,
+            "last_finished_step": 0,
+            "samples_processed": 0,
+        }
+    
+    epoch_from = training_info_stats["current_epoch"]
+    epoch_to = training_info_stats["current_epoch"] + num_epochs
 
     if os.path.exists(f"{config.keras_checkpoint_dir}/checkpoint.model.keras"):
         model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/checkpoint.model.keras")
     else:
         model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/model.keras")
 
-    model.fit(get_dataset(f"{config.training_records_dir}/{latest_record}", config.batch_size),
-            initial_epoch=current_epoch.value,
-            epochs=current_epoch.value + num_epochs,
-            steps_per_epoch=steps_per_epoch,
-            callbacks=[checkpoint_callback, tensorboard_callback]
-            )
-    current_epoch.value += num_epochs
-    model.save(f"{config.keras_checkpoint_dir}/model.keras")
+    print(f"Training from epoch {epoch_from} to {epoch_to}. {num_samples} samples. {steps_per_epoch} steps per epoch.")
+    model.fit(
+        get_dataset(f"{config.training_records_dir}/{latest_record}", config.batch_size),
+        initial_epoch=epoch_from,
+        epochs=epoch_to,
+        steps_per_epoch=steps_per_epoch,
+        callbacks=callbacks,
+        verbose=1)
+    
+    # Update tracked training info
+    training_info_stats["current_epoch"] = epoch_to
+    training_info_stats["last_finished_step"] = current_step
+    training_info_stats["samples_processed"] += num_samples
+    with open(config.training_info_stats, "w") as f:
+        json.dump(training_info_stats, f)
+    
+    # Save model
+    if current_step % config.checkpoint_interval == 0:
+        model.save(f"{config.keras_checkpoint_dir}/model.keras")
 
 def save(config):
     import tensorflow as tf
@@ -179,6 +225,7 @@ def save(config):
     del model
     conversion_params = trt.TrtConversionParams(
             precision_mode=config.trt_precision_mode,
+            use_calibration=True
     )
     converter = trt.TrtGraphConverterV2(
         input_saved_model_dir=trt_save_path,
@@ -191,19 +238,27 @@ def save(config):
 if __name__ == "__main__":
     config = TrainingConfig()
     initial_step = 1
+    seed_games = False
     args = sys.argv[1:] 
     if len(args) > 0:
         config.num_actors = int(args[0])
-    if len(args) > 1:
-        initial_step = int(args[1])
+    if len(args) > 1 and args[1] == "--seed-games":
+        seed_games = True
+
+    initial_step = 0
+    if os.path.exists(config.training_info_stats):
+        with open(config.training_info_stats, "rb") as f:
+            training_info_stats = json.load(f)
+        initial_step = training_info_stats["last_finished_step"] + 1
 
     allow_training = Event()
-    current_epoch = Value('i', 0)
-
-    for i in range(initial_step, config.num_steps + 1):
+    for i in range(initial_step, config.num_steps):
         # Generate N games
-        print(f"Scheduling self play {i+1} {config.games_per_step} games per step.")
-        self_play(config)
+        print(f"Scheduling self play {i} / {config.num_steps} games per step.")
+        if not seed_games:
+            self_play(config)
+        else:
+            seed_games = False
 
         # Save as tensor records?
         print(f"Preparing data for training.")
@@ -214,7 +269,7 @@ if __name__ == "__main__":
             continue
 
         # Train on those games
-        p = Process(target=train, args=(config, current_epoch,))
+        p = Process(target=train, args=(config, i))
         p.start()
         p.join()
 
