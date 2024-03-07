@@ -130,7 +130,7 @@ cpdef update_image(board, prev_image):
     new_image[91:97, :, :] = p1
     new_image[97:103, :, :] = p2
     if board.is_repetition(2):
-        new_image[:, :, 103] = 1
+        new_image[103, :, :] = 1
     new_image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
     new_image[105, :, :] = int(board.has_kingside_castling_rights(current_player))
     new_image[106, :, :] = int(board.has_queenside_castling_rights(current_player))
