@@ -1,6 +1,6 @@
 import unittest
-import gameimage.c as gic
-import cppchess as chess
+import gameimage as gic
+import chess
 import numpy as np
 
 # Ruy lopez opening from whites perspective
