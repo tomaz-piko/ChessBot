@@ -10,6 +10,7 @@ from keras.layers import (
 )
 from keras.losses import CategoricalCrossentropy
 from keras.regularizers import l2
+from keras.optimizers import SGD, Adam
 import keras.backend as K
 from .config import TrainingConfig
 import tensorflow as tf
@@ -30,10 +31,7 @@ def _create_residual_block(x, i):
 
 def generate_model():
     # Define the input layer
-    input_layer = Input(shape=config.image_shape, dtype=tf.uint8, name="input_layer")
-    input_layer = tf.cast(input_layer[:, :-1], tf.float32)
-    # Normalize last plane
-    input_layer = tf.concat([input_layer, tf.expand_dims(tf.divide(input_layer[:, -1], 50.0), axis=1)], axis=1)
+    input_layer = Input(shape=config.image_shape, name="input_layer")
 
     # Define the body
     x = Conv2D(filters=config.conv_filters , kernel_size=3, strides=1, data_format="channels_first", padding="same", use_bias=False, kernel_initializer=config.conv_kernel_initializer, kernel_regularizer=l2(config.l2_reg), name="Body-Conv2D")(input_layer)
@@ -45,7 +43,7 @@ def generate_model():
         x = _create_residual_block(x, i)
 
     value_head = Conv2D(filters=config.value_head_filters, kernel_size=1, strides=1, data_format="channels_first", padding="same", use_bias=False, kernel_initializer=config.conv_kernel_initializer, kernel_regularizer=l2(config.l2_reg), name=f"ValueHead-Conv2D")(x)
-    value_head = BatchNormalization(name=f"ValueHead-BatchNorm")(value_head)
+    value_head = BatchNormalization(name=f"ValueHead-BatchNorm", axis=1)(value_head)
     value_head = ReLU(name=f"ValueHead-ReLU")(value_head)
     value_head = Flatten(name=f"ValueHead-Flatten", data_format="channels_first")(value_head)
     value_head = Dense(config.value_head_dense, activation='relu', use_bias=config.use_bias_on_outputs, kernel_regularizer=l2(config.l2_reg), name=f"ValueHead-DenseReLU")(value_head)
@@ -61,18 +59,21 @@ def generate_model():
     # Define the optimizer
     learning_rate = config.learning_rate["Static"]["lr"]
     if config.optimizer == "SGD":      
-        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate, nesterov=config.sgd_nesterov, momentum=config.sgd_momentum)
+        optimizer = SGD(learning_rate=learning_rate, nesterov=config.sgd_nesterov, momentum=config.sgd_momentum)
     elif config.optimizer == "Adam":
-        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+        optimizer = Adam(learning_rate=learning_rate)
 
     # Define the model
     model = Model(inputs=input_layer, outputs=[value_head, policy_head])
     model.compile(
         optimizer=optimizer,
-        loss=[
-            "mean_squared_error",
-            CategoricalCrossentropy(from_logits=True)
-        ],
-        loss_weights=[config.value_head_loss_weight, config.policy_head_loss_weight]
+        loss={
+            "value_head": "mean_squared_error",
+            "policy_head": CategoricalCrossentropy(from_logits=True)
+        },
+        loss_weights={
+            "value_head": config.value_head_loss_weight,
+            "policy_head": config.policy_head_loss_weight
+        }
     )
     return model

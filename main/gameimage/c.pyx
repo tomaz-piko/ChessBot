@@ -8,7 +8,7 @@ ctypedef int DTYPE_t
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef parse_piece_map(pieces_map: generator, flip: bool):
+cdef parse_piece_map(pieces_map, flip: bool):
     cdef int N = 8
     cdef Py_ssize_t row, col
     cdef int idx
@@ -22,10 +22,11 @@ cdef parse_piece_map(pieces_map: generator, flip: bool):
         if flip:
             row = 7 - idx // 8
             col = 7 - idx % 8
+            board_np_view[N - row - 1, N - col - 1] = pieces[piece.symbol()]
         else:
             row = idx // 8
             col = idx % 8
-        board_np_view[N - row - 1, col] = pieces[piece.symbol()]
+            board_np_view[N - row - 1, col] = pieces[piece.symbol()]
     return board_np
     
 
@@ -42,9 +43,9 @@ cdef pieces_onehot(int[:,:] board_np_view, bint to_play):
     cdef Py_ssize_t i, j, p
     cdef Py_ssize_t _P = 6
     
-    for p in range(_P):  
-        for i in range(N):
-            for j in range(N):    
+    for p in xrange(_P):  
+        for i in xrange(N):
+            for j in xrange(N):    
                 if board_np_view[i, j] == p + 1:
                     onehot_w_view[p, i, j] = 1
                 elif board_np_view[i, j] == -(p + 1):
@@ -61,7 +62,7 @@ cpdef board_to_image(board):
     cdef int N = 8
     cdef int T = 8
     cdef int M = 13
-    cdef int L = 6
+    cdef int L = 5
     cdef bint current_player = board.turn
     cdef np.ndarray image = np.zeros([T * M + L, N, N], dtype=DTYPE)
     cdef np.ndarray[DTYPE_t, ndim=2] board_np
@@ -71,7 +72,7 @@ cpdef board_to_image(board):
     cdef Py_ssize_t t, idx
 
     tmp = board.copy()
-    for t in range(_T):
+    for t in xrange(_T):
         idx = (T - t - 1) * M
         board_np = parse_piece_map(tmp.piece_map(), not current_player)
         p1, p2 = pieces_onehot(board_np, current_player)
@@ -83,12 +84,12 @@ cpdef board_to_image(board):
             tmp.pop()
         else:
             break
-    image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
-    image[105, :, :] = int(board.has_kingside_castling_rights(current_player))
-    image[106, :, :] = int(board.has_queenside_castling_rights(current_player))
-    image[107, :, :] = int(board.has_kingside_castling_rights(not current_player))
-    image[108, :, :] = int(board.has_queenside_castling_rights(not current_player))
-    image[109, :, :] = board.halfmove_clock
+    #image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
+    image[104, :, :] = int(board.has_kingside_castling_rights(current_player))
+    image[105, :, :] = int(board.has_queenside_castling_rights(current_player))
+    image[106, :, :] = int(board.has_kingside_castling_rights(not current_player))
+    image[107, :, :] = int(board.has_queenside_castling_rights(not current_player))
+    image[108, :, :] = board.halfmove_clock
     return image.astype(np.uint8)
 
 @cython.boundscheck(False)
@@ -99,9 +100,9 @@ cdef copy_history(np.ndarray[DTYPE_t, ndim=3] new_image, np.ndarray[DTYPE_t, ndi
     cdef Py_ssize_t t, _from1, _from2, _to1, _to2
     cdef Py_ssize_t M = 13
 
-    tmp = np.flip(prev_image, axis=(1, -1)) # For channels first
+    tmp = np.flip(prev_image, axis=1) # For channels first
     tmp[0:91, :, :] = tmp[13:104, :, :]
-    for t in range(T):
+    for t in xrange(T):
         _from1 = (t * M)
         _from2 = (t * M) + 6
         _to1 = (t * M) + 6
@@ -116,7 +117,7 @@ cpdef update_image(board, prev_image):
     cdef int N = 8
     cdef int T = 8
     cdef int M = 13
-    cdef int L = 6
+    cdef int L = 5
     cdef bint current_player = board.turn
     cdef np.ndarray[DTYPE_t, ndim=3] p1
     cdef np.ndarray[DTYPE_t, ndim=3] p2
@@ -131,10 +132,26 @@ cpdef update_image(board, prev_image):
     new_image[97:103, :, :] = p2
     if board.is_repetition(2):
         new_image[103, :, :] = 1
-    new_image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
-    new_image[105, :, :] = int(board.has_kingside_castling_rights(current_player))
-    new_image[106, :, :] = int(board.has_queenside_castling_rights(current_player))
-    new_image[107, :, :] = int(board.has_kingside_castling_rights(not current_player))
-    new_image[108, :, :] = int(board.has_queenside_castling_rights(not current_player))
-    new_image[109, :, :] = board.halfmove_clock
+    #new_image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
+    new_image[104, :, :] = int(board.has_kingside_castling_rights(current_player))
+    new_image[105, :, :] = int(board.has_queenside_castling_rights(current_player))
+    new_image[106, :, :] = int(board.has_kingside_castling_rights(not current_player))
+    new_image[107, :, :] = int(board.has_queenside_castling_rights(not current_player))
+    new_image[108, :, :] = board.halfmove_clock
     return new_image.astype(np.uint8)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+cpdef convert_to_model_input(np.ndarray[np.uint8_t, ndim=3] image):
+    cdef float max_val = 99.0
+    cdef Py_ssize_t last_plane = 108
+    cdef model_input = np.zeros([1, 109, 8, 8], dtype=np.float32)
+    cdef np.ndarray[np.uint8_t, ndim=3] image_view = image#.astype(DTYPE)
+    cdef float[:, :, :, :] model_input_view = model_input
+    cdef Py_ssize_t i, j, k
+    for i in xrange(8):
+        for j in xrange(8):
+            for k in xrange(last_plane - 1):
+                model_input_view[0, k, i, j] = image_view[k, i, j]
+            model_input_view[0, last_plane, i, j] = float(image_view[last_plane, i, j]) / max_val
+    return model_input

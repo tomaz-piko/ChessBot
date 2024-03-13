@@ -1,9 +1,11 @@
 import unittest
 from game import Game
-import cppchess as chess
+#import cppchess as chess
+import chess
 from tf_funcs import fake_network
 from mcts import run_mcts
-from gameimage.c import board_to_image
+#from gameimage.c import board_to_image
+from gameimage import board_to_image
 import numpy as np
 from train.config import TrainingConfig
 
@@ -39,8 +41,8 @@ class TestTrainData(unittest.TestCase):
             
             player_on_turn.append(game.to_play())
             image = board_to_image(game.board)
-            for i in range(119):
-                self.assertTrue(np.all(root.image[:, :, i] == image[:, :, i]), f"Image & root.image missmatch at {i}\n\n{game.board}\n\n{root.image[:, :, i]}\n\n{image[:, :, i]}")
+            for i in range(110):
+                self.assertTrue(np.all(root.image[i] == image[i]), f"Image & root.image missmatch at {i}\n\n{game.board}\n\n{root.image[i]}\n\n{image[i]}")
             game.make_move(move)
         _ = game.terminal_with_outcome()
         terminal_values_t = [game.terminal_value(player) for player in player_on_turn]

@@ -123,7 +123,8 @@ def uci_to_action(uci: str, player: bool):
         bool: True if the UCI string is valid, False otherwise
         int: Returns the index of the action from actions_dict_reverse for a given UCI string
     """
-    columns_str = _columns_str if player == chess.WHITE else _columns_str[::-1]
+    #columns_str = _columns_str if player == chess.WHITE else _columns_str[::-1]
+    columns_str = _columns_str
     rows_str = _rows_str if player == chess.WHITE else _rows_str[::-1]
     directions_dict = _directions_dict
 

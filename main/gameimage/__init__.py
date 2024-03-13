@@ -4,7 +4,7 @@ N = 8
 T = 8
 num_pieces = 6
 M = num_pieces*2 + 1 # changed from +2 (removed second repetition plane)
-L = 6 # 7 Changed from 7 (removed full_move count plane)
+L = 5 # 7 Changed from 7 (removed full_move count plane, and color plane)
 image_shape = (T*M+L, N, N)
 
 dtype = np.uint8 # Changed from np.int16 (Full move count removed and half move count max is 100 after that its a draw)
@@ -19,10 +19,14 @@ def parse_piece_map(pieces_map: dict, flip: bool):
         if flip:
             row = 7 - idx // 8
             col = 7 - idx % 8
+            i = N - row - 1
+            j = N - col - 1
         else:
             row = idx // 8
             col = idx % 8
-        board_np[N - row - 1, col] = pieces[piece.symbol()]
+            i = N - row - 1
+            j = col
+        board_np[i, j] = pieces[piece.symbol()]
     return board_np
 
 def pieces_onehot(board_np: np.ndarray, to_play: bool):
@@ -54,12 +58,12 @@ def board_to_image(board):
             tmp.pop()
         else:
             break
-    image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
-    image[105, :, :] = int(board.has_kingside_castling_rights(current_player))
-    image[106, :, :] = int(board.has_queenside_castling_rights(current_player))
-    image[107, :, :] = int(board.has_kingside_castling_rights(not current_player))
-    image[108, :, :] = int(board.has_queenside_castling_rights(not current_player))
-    image[109, :, :] = board.halfmove_clock
+    #image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
+    image[104, :, :] = int(board.has_kingside_castling_rights(current_player))
+    image[105, :, :] = int(board.has_queenside_castling_rights(current_player))
+    image[106, :, :] = int(board.has_kingside_castling_rights(not current_player))
+    image[107, :, :] = int(board.has_queenside_castling_rights(not current_player))
+    image[108, :, :] = board.halfmove_clock
 
     return image
 
@@ -68,7 +72,8 @@ def update_image(board, prev_image: np.ndarray):
     
     # Copy previous time steps
     #flipped = np.flip(np.flip(prev_image, axis=0), axis=1) # For channels last
-    flipped = np.flip(prev_image, axis=(1, -1)) # For channels first
+    #flipped = np.flip(prev_image, axis=(1, -1)) # For channels first
+    flipped = np.flip(prev_image, axis=1)
     #flipped = np.roll(flipped, -14) # Roll back for one timestep
     flipped[0:91, :, :] = flipped[13:104, :, :]
     for t in range(T - 1):
@@ -85,11 +90,18 @@ def update_image(board, prev_image: np.ndarray):
     new_image[97:103, :, :] = p2
     if board.is_repetition(2):
         new_image[103, :, :] = 1
-    new_image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
-    new_image[105, :, :] = int(board.has_kingside_castling_rights(current_player))
-    new_image[106, :, :] = int(board.has_queenside_castling_rights(current_player))
-    new_image[107, :, :] = int(board.has_kingside_castling_rights(not current_player))
-    new_image[108, :, :] = int(board.has_queenside_castling_rights(not current_player))
-    new_image[109, :, :] = board.halfmove_clock
+    #new_image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
+    new_image[104, :, :] = int(board.has_kingside_castling_rights(current_player))
+    new_image[105, :, :] = int(board.has_queenside_castling_rights(current_player))
+    new_image[106, :, :] = int(board.has_kingside_castling_rights(not current_player))
+    new_image[107, :, :] = int(board.has_queenside_castling_rights(not current_player))
+    new_image[108, :, :] = board.halfmove_clock
     
     return new_image
+
+def convert_to_model_input(image):
+    image = image.astype(np.float32)
+    if len(image.shape) == 3:
+        image = np.expand_dims(image, axis=0)
+    image[:, -1] = image[:, -1] / 99
+    return image

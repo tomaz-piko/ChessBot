@@ -14,6 +14,11 @@ extensions = [
         include_dirs=[numpy.get_include()]
     ),
     Extension(
+        "main.mcts2.c",
+        sources=["main/mcts2/c.pyx"],
+        include_dirs=[numpy.get_include()]
+    ),
+    Extension(
         "main.cppchess.__init__",
         sources=["main/cppchess/__init__.pyx"],
         language="c++",

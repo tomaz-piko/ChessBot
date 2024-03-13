@@ -1,4 +1,3 @@
-import numpy as np
 import cppchess as chess
 from gameimage.c import board_to_image
 
@@ -87,7 +86,7 @@ class Game:
             return True
         return False
 
-    def terminal_value(self, player: bool) -> int:
+    def terminal_value(self, player: bool) -> float:
         """Returns the value of the terminal state.
             0.0 if the game is not over.
             1.0 if the current player wins.
@@ -97,13 +96,13 @@ class Game:
             float: Value of the terminal state.
         """
         if not self.outcome:
-            return 0
+            return 0.0
         if self.outcome.winner == player:
-            return 1
+            return 1.0
         elif self.outcome.winner == (not player):
-            return -1
+            return -1.0
         else:
-            return 0
+            return 0.0
 
     def legal_moves(self) -> list:
         """Returns a list of legal moves from current position.
@@ -113,13 +112,21 @@ class Game:
         """
         return [move.uci() for move in self.board.legal_moves]
 
-    def make_move(self, move: str) -> None:
+    def make_move(self, move: str):
         """Makes a move on the board.
 
         Args:
             move (str): Move to make.
         """
-        self.board.push_uci(move)
+        return self.board.push_uci(move)
+
+    def make_move_san(self, move: str):
+        """Makes a move on the board.
+
+        Args:
+            move (str): Move to make.
+        """
+        return self.board.push_san(move)
 
     def clone(self) -> "Game":
         """Returns a copy of the game.

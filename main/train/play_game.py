@@ -22,7 +22,7 @@ def play_game(config, trt_func):
         # Playout cap randomization
         do_full_search = True if np.random.default_rng().random() < config.playout_cap_random_p else False
         num_simulations = config.num_mcts_sims[1] if do_full_search else config.num_mcts_sims[0]
-        pb_c_factor = config.pb_c_factor[1] if do_full_search else config.pb_c_factor[0]
+        pb_c_factor = config.pb_c_factor_min if do_full_search else config.pb_c_factor
 
         # Run MCTS 
         move, root = run_mcts(

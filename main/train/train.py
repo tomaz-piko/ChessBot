@@ -2,7 +2,7 @@ from .config import TrainingConfig
 from .play_game import play_game
 import numpy as np
 from time import time
-from multiprocessing import Process, Event, Manager, BoundedSemaphore
+from multiprocessing import Process, Event, Manager
 from datetime import datetime
 import pickle
 import json
@@ -10,34 +10,33 @@ import os
 import sys
 from functools import partial
 from game import Game
+from gameimage import convert_to_model_input
 
 def lr_scheduler(epoch, lr):
     config = TrainingConfig()
-    if epoch in config.sgd_args["learning_rate"]:
-        return config.sgd_args["learning_rate"][epoch]
-    return lr
+    return config.learning_rate["Static"]["lr"]
 
-def play_n_games(pid, model_init_semahpor, config, games_count):
+def play_n_games(pid, model_init_semaphor, config, games_count):
     import tensorflow as tf
     if config.allow_gpu_growth:
         gpu_devices = tf.config.experimental.list_physical_devices('GPU')
         tf.config.experimental.set_memory_growth(gpu_devices[0], True)
+    from trt_funcs import load_trt_model
 
     # Load model
     models = os.listdir(config.trt_checkpoint_dir)
     models.sort()
     latest = models[-1]
-    with model_init_semahpor:
-        model = tf.saved_model.load(f"{config.trt_checkpoint_dir}/{latest}/saved_model")
-        trt_func = model.signatures['serving_default']
-        image = Game.image_sample().astype(np.float32)
-        image = tf.expand_dims(image, axis=0)
-        image = tf.convert_to_tensor(image, dtype=tf.float32)
+    with model_init_semaphor:
+        trt_func, loaded_model = load_trt_model(f"{config.trt_checkpoint_dir}/{latest}")
+        image = Game.image_sample()
+        image = convert_to_model_input(image.astype(np.uint8))
+        image = tf.cast(image, tf.float32)
         _ = trt_func(image)
 
     # Play games until GAMES_PER_CYCLE reached for all processes combined
     current_game = 0
-    while games_count.value < config.games_per_step:
+    while games_count.value < config.games_per_cycle:
         t1 = time()
         images, (terminal_values, visit_counts), summary = play_game(config, trt_func)
         t2 = time()
@@ -51,7 +50,6 @@ def play_n_games(pid, model_init_semahpor, config, games_count):
                                 terminal_value=[terminal_value], 
                                 visit_count=visit_count)
         current_game += 1
-
 
 def self_play(config):
     processes = {}
@@ -67,9 +65,9 @@ def self_play(config):
         for p in processes.values():
             p.join()
 
-
 def prepare_data(config, allow_training):
     import tensorflow as tf
+    from gameimage import convert_to_model_input
 
     if os.path.exists(config.positions_usage_stats):
         with open(config.positions_usage_stats, "rb") as f:
@@ -98,7 +96,8 @@ def prepare_data(config, allow_training):
     with tf.io.TFRecordWriter(f"{config.training_records_dir}/{timestamp}-{num_samples}.tfrecords") as writer:
         for i in positions_chosen:
             data_np = np.load(f"{config.self_play_positions_dir}/{positions[i]}")
-            image_features = tf.train.Feature(float_list=tf.train.FloatList(value=data_np["image"].flatten()))
+            image = convert_to_model_input(data_np["image"].astype(np.uint8))
+            image_features = tf.train.Feature(float_list=tf.train.FloatList(value=image.flatten()))
             terminal_value_features = tf.train.Feature(float_list=tf.train.FloatList(value=data_np["terminal_value"]))
             visit_count_features = tf.train.Feature(float_list=tf.train.FloatList(value=data_np["visit_count"]))
 
@@ -116,24 +115,22 @@ def prepare_data(config, allow_training):
         os.remove(f"{config.training_records_dir}/{records.pop(0)}")
     
     # Clean up overused positions
-    to_delete = []
-    for position, count in positions_usage_counts.items():
-        if count >= config.delete_sample_after_num_trains:
-            to_delete.append(position)
-    for position in to_delete:
-        os.remove(f"{config.self_play_positions_dir}/{position}")
-        del positions_usage_counts[position]
+    if len(positions) > config.keep_positions_num:
+        positions.sort(key=lambda x: os.path.getmtime(f"{config.self_play_positions_dir}/{x}"))
+        to_delete = positions[:len(positions) - config.keep_positions_num]
+        for position in to_delete:
+            os.remove(f"{config.self_play_positions_dir}/{position}")
+            del positions_usage_counts[position]
     with open(config.positions_usage_stats, "wb") as f:
         pickle.dump(positions_usage_counts, f)
 
     allow_training.set()
-    
 
 def train(config, current_step):
     import tensorflow as tf
     def read_tfrecord(example_proto):
         feature_description = {
-            "image": tf.io.FixedLenFeature([8, 8, 119], tf.float32),
+            "image": tf.io.FixedLenFeature([109, 8, 8], tf.float32),
             "value_head": tf.io.FixedLenFeature([1], tf.float32),
             "policy_head": tf.io.FixedLenFeature([4672], tf.float32),
         }
@@ -160,10 +157,8 @@ def train(config, current_step):
             verbose=0,
         )
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=config.tensorboard_log_dir, histogram_freq=1)
-    callbacks = [checkpoint_callback, tensorboard_callback]
-    if config.optimizer == "SGD":
-        lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
-        callbacks.append(lr_callback)
+    lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
+    callbacks = [checkpoint_callback, tensorboard_callback, lr_callback]
 
     # Get latest record file
     records = os.listdir(config.training_records_dir)
@@ -209,41 +204,28 @@ def train(config, current_step):
         json.dump(training_info_stats, f)
     
     # Save model
-    if current_step % config.checkpoint_interval == 0:
-        model.save(f"{config.keras_checkpoint_dir}/model.keras")
+    model.save(f"{config.keras_checkpoint_dir}/model.keras")
 
 def save(config):
     import tensorflow as tf
     if config.allow_gpu_growth:
         gpu_devices = tf.config.experimental.list_physical_devices('GPU')
         tf.config.experimental.set_memory_growth(gpu_devices[0], True)
-    from tensorflow.python.compiler.tensorrt import trt_convert as trt
+    from trt_funcs import save_trt_model
 
     trt_save_path = f"{config.trt_checkpoint_dir}/{datetime.now().strftime('%d-%m-%Y_%H:%M:%S')}/saved_model"
-    model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/model.keras")
-    model.save(trt_save_path) # Dummy model for conversion
-    del model
-    conversion_params = trt.TrtConversionParams(
-            precision_mode=config.trt_precision_mode,
-            use_calibration=True
-    )
-    converter = trt.TrtGraphConverterV2(
-        input_saved_model_dir=trt_save_path,
-        conversion_params=conversion_params,
-    )
-    converter.convert()
-    converter.save(trt_save_path)
-    
+    keras_model_path = f"{config.keras_checkpoint_dir}/model.keras"
+    save_trt_model(keras_model_path, trt_save_path, config.trt_precision_mode)
 
 if __name__ == "__main__":
     config = TrainingConfig()
-    initial_step = 1
-    seed_games = False
-    args = sys.argv[1:] 
+    skip_selfplay_step = False
+    args = sys.argv[1:]
     if len(args) > 0:
         config.num_actors = int(args[0])
-    if len(args) > 1 and args[1] == "--seed-games":
-        seed_games = True
+    if len(args) > 1:
+        if "--skip-selfplay-step" in args:
+            skip_selfplay_step = True
 
     initial_step = 0
     if os.path.exists(config.training_info_stats):
@@ -252,13 +234,13 @@ if __name__ == "__main__":
         initial_step = training_info_stats["last_finished_step"] + 1
 
     allow_training = Event()
-    for i in range(initial_step, config.num_steps):
+    for i in range(initial_step, config.num_cycles):
         # Generate N games
-        print(f"Scheduling self play {i} / {config.num_steps} games per step.")
-        if not seed_games:
+        print(f"Scheduling self play {i} / {config.num_cycles} training steps.")
+        if not skip_selfplay_step: # Todo make option to skip multiple self play steps
             self_play(config)
         else:
-            seed_games = False
+            skip_selfplay_step = False
 
         # Save as tensor records?
         print(f"Preparing data for training.")
@@ -274,9 +256,8 @@ if __name__ == "__main__":
         p.join()
 
         # Save trt model
-        if i % config.checkpoint_interval == 0:
+        if i > 0 and i % config.checkpoint_interval == 0:
             print(f"Converting model to TRT format.")
             p = Process(target=save, args=(config,))
             p.start()
             p.join()
-
