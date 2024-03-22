@@ -7,7 +7,7 @@ from mcts.c import run_mcts
 
 def calc_search_statistics(config: TrainingConfig, root, to_play):
     sum_visits = sum([child.N for child in root.children.values()])
-    child_visits = np.zeros(config.num_actions)
+    child_visits = np.zeros(config.num_actions, dtype=np.float32)
     for uci_move, child in root.children.items():
         action = map_w[uci_move] if to_play else map_b[uci_move]
         child_visits[action] = child.N / sum_visits
@@ -22,24 +22,22 @@ def play_game(config, trt_func):
         # Playout cap randomization
         do_full_search = True if np.random.default_rng().random() < config.playout_cap_random_p else False
         num_simulations = config.num_mcts_sims[1] if do_full_search else config.num_mcts_sims[0]
-        pb_c_factor = config.pb_c_factor_min if do_full_search else config.pb_c_factor
 
         # Run MCTS 
-        move, root = run_mcts(
-            config=config,
+        move, root, statistics = run_mcts(
             game=game,
-            network=trt_func,
+            config=config,
+            trt_func=trt_func,
+            num_simulations=num_simulations,
+            minimal_exploration=not do_full_search,
             root=root,
             reuse_tree=not was_full_search and not do_full_search,
-            num_simulations=num_simulations,
-            num_sampling_moves=config.num_mcts_sampling_moves, # Makes sure games are diverse (the picked move has no direct influence on the search probablities which are used for training)
-            add_noise=do_full_search, # Quick searches have disabled exploration functions
-            pb_c_factor=pb_c_factor # None for full search (uses AZ exploration C calculation), 1.0 for quick search
+            return_statistics=do_full_search
         )
         
         # Only moves with full search depth are added to the buffer for training
         if do_full_search:
-            search_statistics.append(calc_search_statistics(config, root, game.to_play()))
+            search_statistics.append(statistics)
             images.append(root.image)
             player_on_turn.append(game.to_play())
             
@@ -50,3 +48,37 @@ def play_game(config, trt_func):
     # Get terminal values for game states based on whos turn it was
     terminal_values = [game.terminal_value(player) for player in player_on_turn]
     return images, (terminal_values, search_statistics), summary
+
+""" def play_game2(config, mcts):
+    game = Game(chess.Board())
+    search_statistics, images, player_on_turn = [], [], []
+    was_full_search = True
+    while not game.terminal_with_outcome():
+        # Playout cap randomization
+        do_full_search = True if np.random.default_rng().random() < config.playout_cap_random_p else False
+        num_simulations = config.num_mcts_sims[1] if do_full_search else config.num_mcts_sims[0]
+
+        if was_full_search or do_full_search:
+            mcts.root.reset() # Reuse only the image
+
+        # Run MCTS 
+        move, child_visits = mcts(
+            game=game,
+            num_simulations=num_simulations,
+            minimal_exploration=not do_full_search,
+            return_statistics=do_full_search
+        )
+        
+        # Only moves with full search depth are added to the buffer for training
+        if do_full_search:
+            search_statistics.append(child_visits)
+            images.append(mcts.root.image)
+            player_on_turn.append(game.to_play())
+            
+        was_full_search = do_full_search
+        mcts.root = mcts.root[move]
+        game.make_move(move)
+    summary = f"{game.outcome_str}. Full search moves: {len(images)}/{game.history_len}."
+    # Get terminal values for game states based on whos turn it was
+    terminal_values = [game.terminal_value(player) for player in player_on_turn]
+    return images, (terminal_values, search_statistics), summary """

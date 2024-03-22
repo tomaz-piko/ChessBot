@@ -43,27 +43,23 @@ class DebugNode:
         
         return "%-5s (%-4s)  %-6s  %-26s  %-17s  %-13s  %-13s  %-13s  %-13s" %(self.move, self.action, f"N: {self.N}", f"(v:{to_str(self.value)}, p: {to_str(self.policy)})", f"(p_norm: {to_percent(self.policy_norm)})", f"(P:{to_str(self.P)})", f"(Q:{to_str(self.Q)})", f"(U:{to_str(self.puct)})", f"(Q+U:{to_str(self.Q + self.puct)})")
 
-class Node:
-    @property
-    def all_children(self):
-        return {**self.children, **self.pruned_children}
-
+class Node(object):
     @property
     def Q(self):
         return self.W / self.N if self.N > 0 else self.fpu
 
-    def __init__(self, parent=None, P=0, fpu=0):
+    def __init__(self, fpu=0):
         # Values for tree representation
-        self.parent = parent
+        self.parent = None
         self.children = {}
-        self.pruned_children = {} # Used to reconstruct root node after pruning
         self.image = None
         self.fpu = fpu
+        self.to_play = None
 
         # Values for MCTS
         self.N = 0
-        self.W = 0
-        self.P = P
+        self.W = 0.0
+        self.P = 0.0
 
         # For debugging purposes
         self.init_eval = 0.0
@@ -71,6 +67,13 @@ class Node:
         self.init_policy_norm = 0.0
         self.puct = 0.0
         self.action = None
+
+    def __getitem__(self, move: str):
+        return self.children[move]
+    
+    def __setitem__(self, move: str, node):
+        node.parent = self
+        self.children[move] = node
 
     def is_leaf(self):
         return len(self.children) == 0
@@ -106,141 +109,154 @@ class Node:
         print("%-13s %-7s %-28s %-18s %-14s %-14s %-14s %-14s" %("Move", "Visits", "NN Output", "Policy", "Prior", "Avg. value", "UCB", "Q+U"))
         print("-" * 130)
         # Todo: display best variation
-        debug_nodes = [DebugNode(move, child) for move, child in self.all_children.items()]
+        debug_nodes = [DebugNode(move, child) for move, child in self.children.items()]
         sorted_children = sorted(debug_nodes, key=lambda x: x.N, reverse=True) # Sort by visit count
         for child in sorted_children:
             print(child)
 
+class Network:
+    def __init__(self, trt_func, batch_size=8):
+        self.trt_func = trt_func
+        self.batch_size = batch_size
 
-def run_mcts(config, game: Game, network, root: Node = None, reuse_tree: bool = False, num_simulations: int = 100, num_sampling_moves: int = 30, add_noise: bool = True, pb_c_factor = None, **kwargs):
-    """Run Monte Carlo Tree Search algorithm from the current game state.
+    def __call__(self, images, fill_buffer=False):
+        images[:, -1] /= 99.0
+        if fill_buffer:
+            batch = np.zeros((self.batch_size, 109, 8, 8), dtype=np.float32)
+            batch[:len(images)] = images
+            values, policy_logits = predict_fn(self.trt_func, batch)
+        else:
+            values, policy_logits = predict_fn(self.trt_func, images)
+             
+        return values.numpy(), policy_logits.numpy()
 
-    Args:
-        game (Game): Current game state.
-        sim_num (int, optional): Number of simulations to run. Defaults to 100.
+def run_mcts(
+        game: Game, 
+        config, 
+        trt_func,
+        num_simulations: int,  
+        minimal_exploration: bool = False, 
+        root: Node = None,
+        reuse_tree: bool = False,
+        **kwargs):
+    time_start = time()
 
-    Returns:
-        Move, Root: Return the move to play and the root node with an updated tree layout.
-    """
-    rng = np.random.default_rng()
+    if minimal_exploration:
+        fpu_root, fpu_leaf = 1.0, 0.0
+        pb_c_factor_root, pb_c_factor_leaf = 1.0, 1.0
+        policy_temp = 1.0
+    else:
+        fpu_root, fpu_leaf = config.fpu_root, config.fpu_leaf
+        pb_c_factor_root, pb_c_factor_leaf = config.pb_c_factor[0], config.pb_c_factor[1]
+        policy_temp = config.policy_temp
     pb_c_base = config.pb_c_base
     pb_c_init = config.pb_c_init
-    policy_temp = config.policy_temp
-    softmax_temp = config.softmax_temp
-    if pb_c_factor is None:
-        pb_c_factor = config.pb_c_factor
-    pb_c_factor_root = pb_c_factor[0]
-    pb_c_factor_leaf = pb_c_factor[1]
-    fpu_root = config.fpu_root
-    fpu_leaf = config.fpu_leaf
 
-    time_start = time()
-    # Initialize the root node
-    # Allows us to reuse the image of the previous root node but also allows us to reuse the tree or make clean start
+    network = Network(trt_func, config.num_parallel_reads)
+    rng = np.random.default_rng()
+
     if root is None:
         root = Node()
-        value = expand(root, game, network, policy_temp, fpu_root)
-        root.init_eval = value
-    else:
-        if reuse_tree:
-            num_simulations = num_simulations - root.N
-        else:
-            root.reset()
-            value = expand(root, game, network, policy_temp, fpu_root)
-            root.init_eval = value
+    elif not reuse_tree:
+        root.reset()
 
-    # Exploration noise used for full searches
-    if add_noise:
+    if root.is_leaf():
+        if root.image is None:
+            root.image = board_to_image(game.board)
+        values, policy_logits = network(
+                    images=np.array([root.image], dtype=np.float32),
+                    fill_buffer=True
+                )
+        expand_node(root, game, fpu_root)
+        evaluate_node(root, policy_logits[0], policy_temp)
+        root.init_eval = value_to_01(values[0].item())
+
+    if not minimal_exploration:
         add_exploration_noise(config, root, rng)
 
-    # Run the simulations
-    for _ in range(num_simulations):
-        # Select the best leaf node
-        node = root    
-        tmp_game = game.clone()    
-        while node.is_leaf() is False:
-            pb_c_fact = pb_c_factor_root if node.is_root() else pb_c_factor_leaf
-            move, node = select_leaf(node, pb_c_base, pb_c_init, pb_c_fact)  # Select best with ucb
-            tmp_game.make_move(move)
+    while root.N < num_simulations:
+        nodes_to_eval = []
+        nodes_to_find = config.num_parallel_reads if root.N + config.num_parallel_reads <= num_simulations else num_simulations - root.N
+        while len(nodes_to_eval) < nodes_to_find:
+            node = root
+            tmp_game = game.clone()
 
-        # Check if leaf is a terminal state
-        value, is_terminal = evaluate(tmp_game)
-        # Expand if possible
-        if not is_terminal:
-            value = expand(node, tmp_game, network, policy_temp, fpu_leaf)
+            # Traverse tree and find a leaf node
+            while not node.is_leaf():
+                pb_c_factor = pb_c_factor_root if node.is_root() else pb_c_factor_leaf
+                move, node = select_leaf(node, pb_c_base=pb_c_base, pb_c_init=pb_c_init, pb_c_factor=pb_c_factor)
+                tmp_game.make_move(move)
 
-        # Store info for debugging
-        node.init_eval = value
+            # Check if game ends here
+            value, terminal = evaluate_game(tmp_game)
+            # If the game is terminal, backup the value and continue with the next simulation
+            if terminal:
+                update(node, flip_value(value))
+                node.init_eval = flip_value(value)
+                if root.N == num_simulations:
+                    break
+                continue
 
-        # Backpropagate the value
-        update(node, flip_value(value))
+            # Expansion
+            node.image = update_image(tmp_game.board, node.parent.image.copy())
+            expand_node(node, tmp_game, fpu_leaf)
+            add_vloss(node)
+
+            # Save the nodes to evaluate and the search paths
+            nodes_to_eval.append(node)
+
+        if not len(nodes_to_eval) > 0:
+            continue
+
+        values, policy_logits = network(
+                images=np.array([node.image for node in nodes_to_eval], dtype=np.float32), 
+                fill_buffer=not nodes_to_find == config.num_parallel_reads
+            )
+
+        for i, (node) in enumerate(nodes_to_eval):
+            evaluate_node(node, policy_logits[i], policy_temp)
+            remove_vloss(node)
+            update(node, flip_value(value_to_01(values[i].item())))
+            node.init_eval = flip_value(value_to_01(values[i].item()))
+
+    end_time = time()
+    if kwargs.get("verbose_move"):
+        print(f"Time for MCTS: {end_time - time_start}")
+        root.display_move_statistics(game)
     
-    time_end = time()
-    # Print Root & it's children
-    if kwargs.get("verbose_move") == 1:
-        print(f"Time taken: {time_end - time_start:.2f}s")
-        root.display_move_statistics(game=game)
+    move = select_move(root, rng, config.softmax_temp if game.history_len < config.num_mcts_sampling_moves else 0.0)
+    if kwargs.get("return_statistics"):
+        child_visits = calculate_search_statistics(root)
+        return move, root, child_visits
+    return move, root
     
-    # return best_move, root
-    temp = softmax_temp if game.history_len < num_sampling_moves else 0
-    return select_move(root, rng, temp), root
+def expand_node(node: Node, game: Game, fpu: float):
+    node.to_play = game.to_play()
+    for move in game.board.legal_moves:
+        node[move.uci()] = Node(fpu)
 
-def get_image(game: Game, node: Node):
-    if node.parent is None: # Root node
-        if node.image is None:
-            node.image = board_to_image(game.board)
-        return convert_to_model_input(node.image)
-    else:
-        if node.parent.image is None:
-            node.image = board_to_image(game.board)
-        else:
-            node.image = update_image(game.board, node.parent.image.copy())
-        return convert_to_model_input(node.image)
 
-def expand(node: Node, game: Game, network, policy_temp: float = 1.0, fpu: float = 0.0):
-    """Evaluate the given node using the neural network.
+def evaluate_node(node: Node, policy_logits, policy_temp):
+    # Extract only the policy logits for the legal moves
+    actions = [map_w[move] if node.to_play else map_b[move] for move in node.children.keys()]
+    policy_logits = policy_logits[actions]
 
-    Args:
-        node (Node): Node to evaluate.z
-    """
-
-    # Get the policy and value from the neural network
-    value, policy_logits = predict_fn(network, get_image(game, node))
-    value = value.numpy().item()
-    policy_logits = policy_logits.numpy().flatten()
-
-    moves = []
-    actions = []
-    policy = []
-    to_play = game.to_play()
-    for move in game.board.legal_moves: # Acces via generator for speedup
-        move_uci = chess.Move.uci(move)
-        action = map_w[move_uci] if to_play else map_b[move_uci]
-        moves.append(move_uci)
-        actions.append(action)
-        policy.append(policy_logits[action])
-   
-    policy = np.array(policy)
-
-    _max = np.max(policy)
-    expsum = np.sum(np.exp(policy - _max))
-    policy_norm = np.exp(policy - (_max + np.log(expsum)))
-    if policy_temp > 0 and policy_temp != 1.0:
-        policy_norm = policy_norm ** (1.0 / policy_temp)
-        policy_norm = policy_norm / np.sum(policy_norm)
-    assert np.sum(policy_norm) > 0.99 and np.sum(policy_norm) < 1.01, f"Policy norm sum is {np.sum(policy_norm)}"
-
-    for move, action, p, p_norm in zip(moves, actions, policy, policy_norm):
-        child = Node(parent=node, P=p_norm, fpu=fpu)
+    # Normalize the policy logits
+    _max = policy_logits.max()
+    expsum = np.sum(np.exp(policy_logits - _max))
+    policy_logits_norm = np.exp(policy_logits - (_max + np.log(expsum)))
+    if policy_temp > 0.0 and policy_temp != 1.0:
+        policy_logits_norm = policy_logits_norm ** (1.0 / policy_temp)
+        policy_logits_norm /= np.sum(policy_logits_norm)
+    
+    # Assign the policy logits to the children as priors
+    for p, p_norm, child in zip(policy_logits, policy_logits_norm, node.children.values()):
+        child.P = p_norm
         child.init_policy = p
         child.init_policy_norm = p_norm
-        child.action = action
-        node.children[move] = child
-
-    return value_to_01(value)
 
 
-def evaluate(game: Game):
+def evaluate_game(game: Game):
     if game.terminal_with_outcome():
         return value_to_01(game.terminal_value(game.to_play())), True
     else:
@@ -260,6 +276,19 @@ def update(node: Node, value: float):
     node.W += value
     if not node.parent is None:
         update(node.parent, flip_value(value))
+
+
+def add_vloss(node: Node):
+    node.W -= 1
+    if not node.parent is None:
+        add_vloss(node.parent)
+
+
+def remove_vloss(node: Node):
+    node.W += 1
+    if not node.parent is None:
+        remove_vloss(node.parent)
+
 
 def select_leaf(node: Node, pb_c_base: float, pb_c_init: float, pb_c_factor: float):
     bestucb = -np.inf
@@ -305,3 +334,10 @@ def add_exploration_noise(config, node: Node, rng: np.random.Generator):
     frac = config.root_exploration_fraction
     for n, child in zip(noise, node.children.values()):
         child.P = child.P * (1 - frac) + n * frac
+
+def calculate_search_statistics(root: Node):
+    child_visits = np.zeros(4672, dtype=np.float32)
+    sum_visits = np.sum([child.N for child in root.children.values()])
+    for uci_move, child in root.children.items():
+        child_visits[map_w[uci_move] if root.to_play else map_b[uci_move]] = child.N / sum_visits
+    return child_visits

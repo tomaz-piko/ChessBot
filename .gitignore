@@ -13,3 +13,4 @@ main/puzzles
 *.html
 *.so
 */cppchess/src
+main/train/conversion_data

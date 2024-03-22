@@ -2,66 +2,10 @@
 import numpy as np
 cimport numpy as np
 cimport cython
-from gameimage.c cimport board_to_image, update_image, convert_to_model_input
-import cppchess as chess
-from game import Game
+from gameimage.c cimport board_to_image, update_image
 from tf_funcs import predict_fn
 from actionspace import map_w, map_b
-from libc.math cimport log, exp
-import pympler.asizeof
-
-cdef class Network:
-    cdef object trt_func
-    cdef dict cache
-    cdef int cache_size
-    cdef int ITEM_SIZE_EST # Pympler a size of value + policy_logits (np.float32)
-
-    def __init__(self, trt_func, use_cache=True, cache_size=2048):
-        self.trt_func = trt_func
-        self.cache = {} if use_cache else None
-        self.cache_size = cache_size if use_cache else 0
-        self.ITEM_SIZE_EST = 18904
-
-    def __cinit__(self, trt_func, use_cache=True, cache_size=2048):
-        self.trt_func = trt_func
-        self.cache = {} if use_cache else None
-        self.cache_size = cache_size if use_cache else 0
-        self.ITEM_SIZE_EST = 18904
-
-    def __call__(self, np.ndarray image, is_cacheable=True):
-        cdef object value
-        cdef object policy_logits
-        cdef np.ndarray[np.float32_t, ndim=4] image_np
-        cdef int image_hash
-
-        if self.cache_size > 0 and is_cacheable:
-            image_hash = hash(image.tobytes())
-            if image_hash in self.cache:
-                value, policy_logits = self.cache[image_hash]
-            else:
-                image_np = convert_to_model_input(image)
-                value, policy_logits = predict_fn(self.trt_func, image_np)
-                value = value.numpy().item()
-                policy_logits = policy_logits.numpy().flatten()
-                if (self.cache_items + 1) * self.ITEM_SIZE_EST < self.cache_size * 1024:
-                    self.cache[image_hash] = (value, policy_logits)
-            return value_to_01(value), policy_logits
-        else:
-            image_np = convert_to_model_input(image)
-            value, policy_logits = predict_fn(self.trt_func, image_np)
-            return value_to_01(value.numpy().item()), policy_logits.numpy().flatten()
-
-    cpdef void clear_cache(self):
-        self.cache.clear()
-
-    @property
-    def cache_items(self):
-        return len(self.cache)
-
-    @property
-    def cache_size(self):
-        return sizeof(self.cache)
-
+from libc.math cimport log
 
 cdef class Node:
     cdef public int N
@@ -70,55 +14,100 @@ cdef class Node:
     cdef public float fpu
     cdef public dict children
     cdef public np.ndarray image
+    cdef public bint to_play
+    cdef public int virtual_losses
 
-    def __init__(self, P=0.0, fpu=0.0):
+    @property
+    def Q(self):
+        return self.W / self.N if self.N > 0 else self.fpu
+
+    def __init__(self, fpu=0.0):
         self.N = 0
-        self.P = P
+        self.P = 0.0
         self.W = 0.0
         self.fpu = fpu
         self.children = {}
         self.image = None
+        self.virtual_losses = 0
+        self.to_play = False
 
-    def __cinit__(self, float P=0.0, float fpu=0.0):
+    def __cinit__(self, float fpu=0.0):
         self.N = 0
-        self.P = P
+        self.P = 0.0
         self.W = 0.0
         self.fpu = fpu
         self.children = {}
         self.image = None
+        self.virtual_losses = 0
+        self.to_play = False
 
-    cdef float Q(self) except *:
-        return self.W / (self.N) if self.N > 0 else self.fpu
+    def __getitem__(self, str move):
+        return self.children[move]
 
-    cdef bint is_leaf(self) except *:
+    def __setitem__(self, str move, Node node):
+        self.children[move] = node
+
+    cpdef bint is_leaf(self) except *:
         return len(self.children) == 0
 
-    cdef void add_child(self, str move, float P, float fpu) except *:
-        self.children[move] = Node(P, fpu)
-    
+    cpdef reset(self):
+        self.N = 0
+        self.P = 0.0
+        self.W = 0.0
+        self.fpu = self.fpu
+        self.children = {}
+        self.virtual_losses = 0
+        self.to_play = False
+
+cdef class Network:
+    cdef object trt_func
+    cdef int batch_size
+
+    def __init__(self, trt_func, batch_size=8):
+        self.trt_func = trt_func
+        self.batch_size = batch_size
+
+    def __cinit__(self, object trt_func, int batch_size=8):
+        self.trt_func = trt_func
+        self.batch_size = batch_size
+
+    def __call__(self, np.ndarray images, bint fill_buffer=False):
+        cdef np.ndarray dummy_images
+        cdef object values
+        cdef object policy_logits
+        
+        images[:, -1] /= 99.0
+        if fill_buffer:
+            dummy_images = np.zeros((self.batch_size, 109, 8, 8), dtype=np.float32)
+            dummy_images[:len(images)] = images
+            values, policy_logits = predict_fn(self.trt_func, dummy_images)
+        else:
+            values, policy_logits = predict_fn(self.trt_func, images)
+             
+        return values.numpy(), policy_logits.numpy()
 
 cdef class MCTS:
     # Search properties
     cdef public Node root
     cdef public Network network
-    cdef public object game
     cdef object rng
-    cdef bint selfplay
+    cdef int num_parallel_reads
+    cdef bint engine_play
 
     # MCTS constants
     cdef float pb_c_base, pb_c_init
-    cdef float pb_c_factor_root, pb_c_factor_leaf,
+    cdef float pb_c_factor_root, pb_c_factor_leaf
     cdef float policy_temp, softmax_temp
     cdef float fpu_root, fpu_leaf
     cdef float dirichlet_alpha, exploration_fraction
     cdef int num_sampling_moves
 
-    def __init__(self, config, game, trt_func, selfplay=False):
+    def __init__(self, config, trt_func, engine_play=True):
         self.root = Node()
-        self.game = game
-        self.network = Network(trt_func)
-        self.selfplay = selfplay
+        self.network = Network(trt_func, batch_size=config.num_parallel_reads)
         self.rng = np.random.default_rng()
+        self.num_parallel_reads = config.num_parallel_reads
+        self.engine_play = engine_play
 
         self.pb_c_base = config.pb_c_base
         self.pb_c_init = config.pb_c_init
@@ -132,13 +121,12 @@ cdef class MCTS:
         self.exploration_fraction = config.root_exploration_fraction
         self.num_sampling_moves = config.num_mcts_sampling_moves
 
-
-    def __cinit__(self, config, game, trt_func, selfplay=False):
+    def __cinit__(self, object config, object trt_func, engine_play=True):
         self.root = Node()
-        self.game = game
-        self.network = Network(trt_func)
-        self.selfplay = selfplay
+        self.network = Network(trt_func, batch_size=config.num_parallel_reads)
         self.rng = np.random.default_rng()
+        self.num_parallel_reads = config.num_parallel_reads
+        self.engine_play = engine_play
 
         self.pb_c_base = config.pb_c_base
         self.pb_c_init = config.pb_c_init
@@ -151,6 +139,125 @@ cdef class MCTS:
         self.dirichlet_alpha = config.root_dirichlet_alpha
         self.exploration_fraction = config.root_exploration_fraction
         self.num_sampling_moves = config.num_mcts_sampling_moves
+
+    def __call__(self, object game, int num_simulations, float time_limit=0.0, bint minimal_exploration=False, bint return_statistics=False):
+        cdef Node node, parent
+        cdef object tmp_game
+        cdef bint terminal
+        cdef object values, policy_logits
+        cdef list nodes_to_eval, search_path, search_paths
+        cdef int nodes_to_find
+        cdef Py_ssize_t i
+        cdef float value, policy_temp, pb_c_factor_root, pb_c_factor_leaf, fpu_root, fpu_leaf
+        
+        if minimal_exploration:
+            fpu_root, fpu_leaf = 1.0, 0.0
+            pb_c_factor_root, pb_c_factor_leaf = 1.0, 1.0
+            policy_temp = 1.0
+        else:
+            fpu_root, fpu_leaf = self.fpu_root, self.fpu_leaf
+            pb_c_factor_root, pb_c_factor_leaf = self.pb_c_factor_root, self.pb_c_factor_leaf
+            policy_temp = self.policy_temp
+
+        if self.root.is_leaf():
+            if self.root.image is None:
+                self.root.image = board_to_image(game.board)
+            values, policy_logits = self.network(
+                images=np.array([self.root.image], dtype=np.float32),
+                fill_buffer=True
+            )
+            self.expand_node(self.root, game, fpu_root)
+            self.evaluate_node(self.root, policy_logits[0], policy_temp)
+
+        if not minimal_exploration and not self.engine_play:
+            self.add_exploration_noise(self.root)
+
+        while self.root.N < num_simulations:
+            nodes_to_eval = []
+            search_paths = []
+
+            nodes_to_find = self.num_parallel_reads if self.root.N + self.num_parallel_reads  <= num_simulations else num_simulations - self.root.N
+            while len(nodes_to_eval) < nodes_to_find:
+                node = self.root
+                search_path = [node]
+                tmp_game = game.clone()
+
+                # Traverse tree and find a leaf node
+                while not node.is_leaf():
+                    pb_c_factor = pb_c_factor_root if len(search_path) == 1 else pb_c_factor_leaf
+                    move, node = self.select(node, pb_c_factor)
+                    tmp_game.make_move(move)
+                    search_path.append(node)
+                
+                # Check if game ends here
+                value, terminal = evaluate_game(tmp_game)
+                # If the game is terminal, backup the value and continue with the next simulation
+                if terminal:
+                    self.backup(search_path, flip_value(value))
+                    if self.root.N >= num_simulations:
+                        break              
+                    continue
+
+                # Expansion
+                parent = search_path[-2]
+                node.image = update_image(tmp_game.board, parent.image.copy())
+                self.expand_node(node, tmp_game, fpu_leaf)
+                self.add_virtual_loss(search_path)
+
+                # Save the nodes to evaluate and the search paths
+                nodes_to_eval.append(node)
+                search_paths.append(search_path)
+
+            if not len(nodes_to_eval) > 0:
+                continue        
+
+            values, policy_logits = self.network(
+                images=np.array([node.image for node in nodes_to_eval], dtype=np.float32),
+                fill_buffer=not nodes_to_find == self.num_parallel_reads
+            )
+
+            for i, (node, search_path) in enumerate(zip(nodes_to_eval, search_paths)):
+                self.evaluate_node(node, policy_logits[i], policy_temp)
+                self.remove_virtual_loss(search_path)
+                self.backup(search_path, flip_value(value_to_01(values[i].item())))
+
+        if not self.engine_play:
+            move = self.select_move(self.root, self.softmax_temp if game.history_len < self.num_sampling_moves else 0.0)
+            child_visits = self.calculate_search_statistics() if return_statistics else None
+            return move, child_visits
+        else:
+            return self.select_move(self.root, 0.0), None
+
+    @cython.wraparound(False)
+    cdef void expand_node(self, Node node, object game, float fpu):
+        cdef bint to_play = game.to_play()
+        cdef object move
+        for move in game.board.legal_moves:
+            node[move.uci()] = Node(fpu=fpu)
+
+    @cython.wraparound(False)
+    cdef void evaluate_node(self, Node node, float[:] policy_logits, float policy_temp):
+        cdef Node child
+        cdef str move_uci
+        cdef float p
+        cdef float _max
+        cdef float expsum
+        cdef np.ndarray[double, ndim=1] policy_np
+        cdef list actions = [map_w[move_uci] if node.to_play else map_b[move_uci] for move_uci in node.children.keys()]
+        cdef Py_ssize_t action
+        cdef list policy_masked = [policy_logits[action] for action in actions]
+
+        policy_np = np.array(policy_masked)
+
+        _max = policy_np.max()
+        expsum = np.sum(np.exp(policy_np - _max))
+        policy_np = np.exp(policy_np - (_max + np.log(expsum)))
+        if policy_temp > 0.0 and policy_temp != 1.0:
+            policy_np = policy_np ** (1.0 / policy_temp)
+            policy_np /= np.sum(policy_np)
+
+        for p, child in zip(policy_np, node.children.values()):
+            child.P = p
 
     cpdef reset(self):
         self.root = Node()
@@ -165,7 +272,7 @@ cdef class MCTS:
         cdef Node bestchild
 
         for move, child in node.children.items():
-            ucb = child.Q() + self.UCB(child.P, child.N, node.N, pb_c_factor)
+            ucb = child.Q + self.UCB(child.P, child.N, node.N, pb_c_factor)
             if ucb > bestucb:
                 bestucb = ucb
                 bestmove = move
@@ -179,7 +286,7 @@ cdef class MCTS:
         cpuct = (
             log((pN + self.pb_c_base + 1) / self.pb_c_base) + self.pb_c_init
         ) * pb_c_factor
-        return cpuct * cP * pN**0.5 / (cN + 1)
+        return cpuct * cP * (pN**0.5) / (cN + 1)
 
     @cython.wraparound(False)
     cdef str select_move(self, Node node, float softmax_temp = 0.0):
@@ -197,84 +304,21 @@ cdef class MCTS:
             pi /= np.sum(pi)
             return moves[np.where(self.rng.multinomial(1, pi) == 1)[0][0]]
 
-    @cython.wraparound(False)
-    cdef void expand(self, Node node, game, float[:] policy_logits, float fpu):
-        cdef list policy = []
-        cdef list moves = []
-        cdef np.ndarray[double, ndim=1] policy_np
-        cdef bint to_play = game.to_play()
-        cdef object move
-        cdef str move_uci
-        cdef int action
-        cdef float p
-        cdef float _max
-        cdef float expsum
+    cdef void add_virtual_loss(self, search_path):
+        for node in search_path[::-1]:
+            node.virtual_losses += 1
+            node.W -= 1
 
-        for move in game.board.legal_moves: # Acces via generator for speedup
-            move_uci = move.uci()
-            action = map_w[move_uci] if to_play else map_b[move_uci]
-            moves.append(move_uci)
-            policy.append(policy_logits[action])
+    cdef void remove_virtual_loss(self, search_path):
+        for node in search_path[::-1]:
+            node.virtual_losses -= 1
+            node.W += 1
 
-        policy_np = np.array(policy)
-        _max = policy_np.max()
-        expsum = np.sum(np.exp(policy_np - _max))
-        policy_np = np.exp(policy_np - (_max + np.log(expsum)))
-        if self.policy_temp > 0.0 and self.policy_temp != 1.0:
-            policy_np = policy_np ** (1.0 / self.policy_temp)
-            policy_np /= np.sum(policy_np) 
-
-        for move_uci, p in zip(moves, policy_np):
-            node.add_child(move_uci, p, fpu)
-
-    @cython.wraparound(False)
     cdef void backup(self, list search_path, float value):
-        for node in search_path:
+        for node in search_path[::-1]:
             node.N += 1
             node.W += value
             value = flip_value(value)
-
-    cpdef str run(self, int num_simulations):
-        cdef Node parent
-        cdef Node node
-        cdef float value
-        cdef bint terminal
-        cdef np.ndarray[float, ndim=1] policy_logits
-        cdef list search_path
-        cdef float fb_c_factor
-        cdef str move
-
-        if self.root.is_leaf():
-            if self.root.image is None:
-                self.root.image = board_to_image(self.game.board)
-            #_, policy_logits = make_predictions(self.network, self.root.image)
-            _, policy_logits = self.network(self.root.image)
-            self.expand(self.root, self.game, policy_logits, self.fpu_root)
-
-        if self.selfplay:
-            self.add_exploration_noise(self.root)
-
-        for _ in xrange(num_simulations):
-            node = self.root
-            search_path = [node]
-            tmp_game = self.game.clone()
-            while not node.is_leaf():
-                pb_c_factor = self.pb_c_factor_root if len(search_path) == 1 else self.pb_c_factor_leaf
-                move, node = self.select(node, pb_c_factor)
-                tmp_game.make_move(move)
-                search_path.append(node)
-
-            value, terminal = evaluate(tmp_game)
-            if not terminal:
-                parent = search_path[-2]
-                node.image = update_image(tmp_game.board, parent.image)
-                #value, policy_logits = make_predictions(self.network, node.image)
-                value, policy_logits = self.network(node.image, is_cacheable=True if tmp_game.history_len < 20 else False)
-                self.expand(node, tmp_game, policy_logits, self.fpu_leaf)
-            
-            self.backup(search_path, flip_value(value))
-
-        return self.select_move(self.root, self.softmax_temp if self.game.history_len < self.num_sampling_moves else 0.0)
 
     @cython.wraparound(False)
     cdef void add_exploration_noise(self, Node node):
@@ -283,20 +327,20 @@ cdef class MCTS:
         for n, child in zip(noise, node.children.values()):
             child.P = child.P * (1 - self.exploration_fraction) + n * self.exploration_fraction
 
-@cython.wraparound(False)
-cdef make_predictions(object network, np.ndarray image):
-    cdef object value
-    cdef object policy_logits
-    cdef float value_f
-    cdef np.ndarray policy_logits_np
+    @cython.wraparound(False)
+    cdef np.ndarray calculate_search_statistics(self):
+        cdef np.ndarray[double, ndim=1] child_visits = np.zeros(4672, dtype=np.float64)
+        cdef int sum_visits = 0
+        cdef str move
+        cdef Node child
 
-    value, policy_logits = predict_fn(network, convert_to_model_input(image))
-    value_f = value.numpy().item()
-    policy_logits_np = policy_logits.numpy().flatten()
-    return value_to_01(value_f), policy_logits_np
+        for move, child in self.root.children.items():
+            child_visits[map_w[move] if self.root.to_play else map_b[move]] = child.N
+            sum_visits += child.N
+        return child_visits / sum_visits
         
 @cython.wraparound(False)
-cdef (float, bint) evaluate(game):
+cdef (float, bint) evaluate_game(object game):
     if game.terminal_with_outcome():
         return value_to_01(game.terminal_value(game.to_play())), True
     else:

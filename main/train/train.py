@@ -21,10 +21,10 @@ def play_n_games(pid, model_init_semaphor, config, games_count):
     if config.allow_gpu_growth:
         gpu_devices = tf.config.experimental.list_physical_devices('GPU')
         tf.config.experimental.set_memory_growth(gpu_devices[0], True)
-    from trt_funcs import load_trt_model
+    from trt_funcs import load_trt_model, load_trt_model_latest
 
     # Load model
-    models = os.listdir(config.trt_checkpoint_dir)
+    """ models = os.listdir(config.trt_checkpoint_dir)
     models.sort()
     latest = models[-1]
     with model_init_semaphor:
@@ -32,8 +32,8 @@ def play_n_games(pid, model_init_semaphor, config, games_count):
         image = Game.image_sample()
         image = convert_to_model_input(image.astype(np.uint8))
         image = tf.cast(image, tf.float32)
-        _ = trt_func(image)
-
+        _ = trt_func(image) """
+    trt_func, loaded_model = load_trt_model_latest()
     # Play games until GAMES_PER_CYCLE reached for all processes combined
     current_game = 0
     while games_count.value < config.games_per_cycle:
@@ -49,6 +49,7 @@ def play_n_games(pid, model_init_semaphor, config, games_count):
                                 image=image, 
                                 terminal_value=[terminal_value], 
                                 visit_count=visit_count)
+        del images, terminal_values, visit_counts
         current_game += 1
 
 def self_play(config):
@@ -96,7 +97,7 @@ def prepare_data(config, allow_training):
     with tf.io.TFRecordWriter(f"{config.training_records_dir}/{timestamp}-{num_samples}.tfrecords") as writer:
         for i in positions_chosen:
             data_np = np.load(f"{config.self_play_positions_dir}/{positions[i]}")
-            image = convert_to_model_input(data_np["image"].astype(np.uint8))
+            image = convert_to_model_input(data_np["image"])
             image_features = tf.train.Feature(float_list=tf.train.FloatList(value=image.flatten()))
             terminal_value_features = tf.train.Feature(float_list=tf.train.FloatList(value=data_np["terminal_value"]))
             visit_count_features = tf.train.Feature(float_list=tf.train.FloatList(value=data_np["visit_count"]))
@@ -119,8 +120,11 @@ def prepare_data(config, allow_training):
         positions.sort(key=lambda x: os.path.getmtime(f"{config.self_play_positions_dir}/{x}"))
         to_delete = positions[:len(positions) - config.keep_positions_num]
         for position in to_delete:
-            os.remove(f"{config.self_play_positions_dir}/{position}")
-            del positions_usage_counts[position]
+            try:
+                os.remove(f"{config.self_play_positions_dir}/{position}")
+                del positions_usage_counts[position]
+            except:
+                print(f"Failed to remove {position}.")
     with open(config.positions_usage_stats, "wb") as f:
         pickle.dump(positions_usage_counts, f)
 

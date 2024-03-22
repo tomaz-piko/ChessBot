@@ -1,11 +1,10 @@
 import numpy as np
+cimport numpy as np
 from game import Game
 from actionspace import map_w, map_b
 from tf_funcs import predict_fn
-from time import time
-cimport numpy as np
-from gameimage.c cimport board_to_image, update_image, convert_to_model_input
-from libc.math cimport log, exp, pow
+from gameimage.c cimport board_to_image, update_image
+from libc.math cimport log
 np.import_array()
 
 class Node:
@@ -13,17 +12,18 @@ class Node:
     def Q(self):
         return self.W / self.N if self.N > 0 else self.fpu
 
-    def __init__(self, parent=None, P=0, fpu=0):
+    def __init__(self, parent=None, fpu=0.0):
         # Values for tree representation
         self.parent = parent
         self.children = {}
         self.image = None
         self.fpu = fpu # First play urgency 1 for root children, 0 for others
+        self.to_play = None
 
         # Values for MCTS
         self.N = 0
-        self.W = 0
-        self.P = P
+        self.W = 0.0
+        self.P = 0.0
 
     def is_leaf(self):
         return len(self.children) == 0
@@ -44,127 +44,167 @@ class Node:
         for move, child in sorted_children.items():
             print(f"{move} -> P: {child.P:.6f}, Q: {child.Q:.6f}, W: {child.W:.6f}, N: {child.N}")
 
-def run_mcts(config,
-            game: Game, 
-            network, 
-            root: Node = None, 
-            reuse_tree: bool = False, 
-            num_simulations: int = 100, 
-            num_sampling_moves: int = 30, 
-            add_noise: bool = True,
-            pb_c_factor = None,
-            ):
 
-    rng = np.random.default_rng()
+class Network:
+    def __init__(self, trt_func, batch_size=8):
+        self.trt_func = trt_func
+        self.batch_size = batch_size
+
+    def __call__(self, images, fill_buffer=False):
+        images[:, -1] /= 99.0
+        if fill_buffer:
+            batch = np.zeros((self.batch_size, 109, 8, 8), dtype=np.float32)
+            batch[:len(images)] = images
+            values, policy_logits = predict_fn(self.trt_func, batch)
+        else:
+            values, policy_logits = predict_fn(self.trt_func, images)
+             
+        return values.numpy(), policy_logits.numpy()
+
+
+def run_mcts(
+        game: Game, 
+        config, 
+        trt_func,
+        num_simulations: int,  
+        minimal_exploration: bool = False, 
+        root: Node = None,
+        reuse_tree: bool = False,
+        **kwargs):
+
+    if minimal_exploration:
+        fpu_root, fpu_leaf = 1.0, 0.0
+        pb_c_factor_root, pb_c_factor_leaf = 1.0, 1.0
+        policy_temp = 1.0
+    else:
+        fpu_root, fpu_leaf = config.fpu_root, config.fpu_leaf
+        pb_c_factor_root, pb_c_factor_leaf = config.pb_c_factor[0], config.pb_c_factor[1]
+        policy_temp = config.policy_temp
     pb_c_base = config.pb_c_base
     pb_c_init = config.pb_c_init
-    policy_temp = config.policy_temp
-    softmax_temp = config.softmax_temp
-    if pb_c_factor is None:
-        pb_c_factor = config.pb_c_factor
-    pb_c_factor_root = config.pb_c_factor[0]
-    pb_c_factor_leaf = config.pb_c_factor[1]
-    fpu_root = config.fpu_root
-    fpu_leaf = config.fpu_leaf
 
-    # Initialize the root node
-    # Allows us to reuse the image of the previous root node but also allows us to reuse the tree or make clean start
+    #network = Network(trt_func, config.num_parallel_reads)
+    rng = np.random.default_rng()
+
     if root is None:
         root = Node()
-        _, policy_logits = make_prediction(root, game, network)
-        expand(root, game, policy_logits, policy_temp, fpu_root)
-    else:
-        if reuse_tree:
-            num_simulations = num_simulations - root.N + 1
-        else:
-            root.reset()
-            _, policy_logits = make_prediction(root, game, network)
-            expand(root, game, policy_logits, policy_temp, fpu_root)
+        reuse_tree = False # Can't reuse a tree if there is no tree to reuse
+    elif not reuse_tree:
+        root.reset()
 
-    # Exploration noise used for full searches
-    if add_noise:
+    if root.is_leaf():
+        if root.image is None:
+            root.image = board_to_image(game.board)
+        values, policy_logits = make_predictions(
+                trt_func=trt_func,
+                images=np.array([root.image], dtype=np.float32),
+                batch_size=config.num_parallel_reads,
+                fill_buffer=True
+            )
+        expand_node(root, game, fpu_root)
+        evaluate_node(root, policy_logits[0], policy_temp)
+
+    if not minimal_exploration and not reuse_tree:
         add_exploration_noise(config, root, rng)
 
-    # Run the simulations
-    for _ in xrange(num_simulations):
-        # Select the best leaf node
-        node = root
-        tmp_game = game.clone()
-        while node.is_leaf() is False:
-            pb_c_fact = pb_c_factor_root if node.is_root() else pb_c_factor_leaf
-            move, node = select_leaf(node, pb_c_base, pb_c_init, pb_c_fact)  # Select best with ucb
-            tmp_game.make_move(move)
+    while root.N < num_simulations:
+        nodes_to_eval = []
+        nodes_to_find = config.num_parallel_reads if root.N + config.num_parallel_reads <= num_simulations else num_simulations - root.N
+        while len(nodes_to_eval) < nodes_to_find:
+            node = root
+            tmp_game = game.clone()
 
-        # Evaluate the leaf node
-        value, is_terminal = evaluate(tmp_game)
-        if not is_terminal:           
-            value, policy_logits = make_prediction(root, game, network)
-            expand(node, tmp_game, policy_logits, policy_temp, fpu_leaf)            
+            # Traverse tree and find a leaf node
+            while not node.is_leaf():
+                pb_c_factor = pb_c_factor_root if node.is_root() else pb_c_factor_leaf
+                move, node = select_leaf(node, pb_c_base=pb_c_base, pb_c_init=pb_c_init, pb_c_factor=pb_c_factor)
+                tmp_game.make_move(move)
 
-        # Backpropagate the value
-        update(node, flip_value(value))
+            # Check if game ends here
+            value, terminal = evaluate_game(tmp_game)
+            # If the game is terminal, backup the value and continue with the next simulation
+            if terminal:
+                update(node, flip_value(value))
+                if root.N == num_simulations:
+                    break
+                continue
 
-    # return best_move, root
-    temp = softmax_temp if game.history_len < num_sampling_moves else 0
-    return select_move(root, rng, temp), root
+            # Expansion
+            node.image = update_image(tmp_game.board, node.parent.image.copy())
+            expand_node(node, tmp_game, fpu_leaf)
+            add_vloss(node)
+
+            # Save the nodes to evaluate and the search paths
+            nodes_to_eval.append(node)
+
+        if not len(nodes_to_eval) > 0:
+            continue
+
+        values, policy_logits = make_predictions(
+                trt_func=trt_func,
+                images=np.array([node.image for node in nodes_to_eval], dtype=np.float32),
+                batch_size=config.num_parallel_reads,
+                fill_buffer=not nodes_to_find == config.num_parallel_reads
+            )
+        for i, (node) in enumerate(nodes_to_eval):
+            evaluate_node(node, policy_logits[i], policy_temp)
+            remove_vloss(node)
+            update(node, flip_value(value_to_01(values[i].item())))
+    
+    move = select_move(root, rng, config.softmax_temp if game.history_len < config.num_mcts_sampling_moves else 0.0)
+    if kwargs.get("return_statistics"):
+        child_visits = calculate_search_statistics(root)
+        return move, root, child_visits
+    return move, root, None
 
 
-def get_image(node: Node, game: Game):
-    if node.parent is None: # Root node
-        if node.image is None:
-            node.image = board_to_image(game.board)
-        return convert_to_model_input(node.image)
-    else:
-        if node.parent.image is None:
-            node.image = board_to_image(game.board)
-        else:
-            node.image = update_image(game.board, node.parent.image.copy())
-        return convert_to_model_input(node.image)
+def expand_node(node: Node, game: Game, fpu: float):
+    node.to_play = game.to_play()
+    for move in game.board.legal_moves:
+        node.children[move.uci()] = Node(parent=node, fpu=fpu)
 
 
-def make_prediction(node: Node, game: Game, network):
-    value, policy_logits = predict_fn(network, get_image(node, game))
-    value = value.numpy().item()
-    policy_logits = policy_logits.numpy().flatten()
-    return value_to_01(value), policy_logits
-
-
-cdef expand(object node, object game, float[:] policy_logits, float policy_temp = 1.0, float fpu = 1.0):
-    cdef list policy = []
-    cdef list moves = []
-    cdef np.ndarray[double, ndim=1] policy_np
-    cdef bint to_play = game.to_play()
-    cdef object move
+cdef void evaluate_node(object node, float[:] policy_logits, float policy_temp):
+    cdef object child
     cdef str move_uci
-    cdef int action
     cdef float p
     cdef float _max
     cdef float expsum
-    
-    for move in game.board.legal_moves: # Acces via generator for speedup
-        move_uci = move.uci()
-        action = map_w[move_uci] if to_play else map_b[move_uci]
-        moves.append(move_uci)
-        policy.append(policy_logits[action])
+    cdef np.ndarray[double, ndim=1] policy_np
+    cdef list actions = [map_w[move_uci] if node.to_play else map_b[move_uci] for move_uci in node.children.keys()]
+    cdef Py_ssize_t action
+    cdef list policy_masked = [policy_logits[action] for action in actions]
 
-    policy_np = np.array(policy)
+    policy_np = np.array(policy_masked)
+
     _max = policy_np.max()
     expsum = np.sum(np.exp(policy_np - _max))
     policy_np = np.exp(policy_np - (_max + np.log(expsum)))
     if policy_temp > 0.0 and policy_temp != 1.0:
         policy_np = policy_np ** (1.0 / policy_temp)
-        policy_np /= np.sum(policy_np) 
+        policy_np /= np.sum(policy_np)
 
-    for move_uci, p in zip(moves, policy_np):
-        child = Node(parent=node, P=p, fpu=fpu)
-        node.children[move_uci] = child
+    for p, child in zip(policy_np, node.children.values()):
+        child.P = p
 
 
-def evaluate(game: Game):
+def evaluate_game(game: Game):
     if game.terminal_with_outcome():
         return value_to_01(game.terminal_value(game.to_play())), True
     else:
         return value_to_01(0.0), False
+
+
+def make_predictions(trt_func, images, batch_size, fill_buffer=False):
+    images[:, -1] /= 99.0
+    if fill_buffer:
+        batch = np.zeros((batch_size, 109, 8, 8), dtype=np.float32)
+        batch[:len(images)] = images
+        values, policy_logits = predict_fn(trt_func, batch)
+    else:
+        values, policy_logits = predict_fn(trt_func, images)
+            
+    return values.numpy(), policy_logits.numpy()
 
 
 cdef value_to_01(float value):
@@ -180,6 +220,18 @@ def update(node: Node, value: float):
     node.W += value
     if not node.parent is None:
         update(node.parent, flip_value(value))
+
+
+def add_vloss(node: Node):
+    node.W -= 1
+    if not node.parent is None:
+        add_vloss(node.parent)
+
+
+def remove_vloss(node: Node):
+    node.W += 1
+    if not node.parent is None:
+        remove_vloss(node.parent)
 
 
 cdef select_leaf(object node, float pb_c_base, float pb_c_init, float pb_c_factor):
@@ -231,3 +283,15 @@ def add_exploration_noise(config, node: Node, rng: np.random.Generator):
     frac = config.root_exploration_fraction
     for n, child in zip(noise, node.children.values()):
         child.P = child.P * (1 - frac) + n * frac
+
+
+cdef calculate_search_statistics(object root):
+    cdef np.ndarray[double, ndim=1] child_visits = np.zeros(4672, dtype=np.float64)
+    cdef int sum_visits = 0
+    cdef str move
+    cdef object child
+
+    for move, child in root.children.items():
+        child_visits[map_w[move] if root.to_play else map_b[move]] = child.N
+        sum_visits += child.N
+    return child_visits / sum_visits
