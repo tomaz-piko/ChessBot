@@ -1,6 +1,5 @@
 from tensorflow.python.compiler.tensorrt import trt_convert as trt
 import os
-from gameimage import convert_to_model_input
 import numpy as np
 import tensorflow as tf
 from train.config import TrainingConfig
@@ -38,6 +37,10 @@ def save_trt_model(model, trt_model_path, precision_mode=trt.TrtPrecisionMode.FP
         converter.convert(calibration_input_fn=input_fn)
     else:
         converter.convert()
+
+    if precision_mode != trt.TrtPrecisionMode.INT8:
+        converter.build(input_fn=input_fn)
+        
     converter.save(trt_model_path)
 
 

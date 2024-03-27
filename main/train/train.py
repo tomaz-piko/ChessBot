@@ -11,28 +11,20 @@ import sys
 from functools import partial
 from game import Game
 from gameimage import convert_to_model_input
+import gc
 
 def lr_scheduler(epoch, lr):
     config = TrainingConfig()
     return config.learning_rate["Static"]["lr"]
 
-def play_n_games(pid, model_init_semaphor, config, games_count):
+def play_n_games(pid, config, games_count):
     import tensorflow as tf
     if config.allow_gpu_growth:
         gpu_devices = tf.config.experimental.list_physical_devices('GPU')
         tf.config.experimental.set_memory_growth(gpu_devices[0], True)
-    from trt_funcs import load_trt_model, load_trt_model_latest
+    from trt_funcs import load_trt_model_latest
 
     # Load model
-    """ models = os.listdir(config.trt_checkpoint_dir)
-    models.sort()
-    latest = models[-1]
-    with model_init_semaphor:
-        trt_func, loaded_model = load_trt_model(f"{config.trt_checkpoint_dir}/{latest}")
-        image = Game.image_sample()
-        image = convert_to_model_input(image.astype(np.uint8))
-        image = tf.cast(image, tf.float32)
-        _ = trt_func(image) """
     trt_func, loaded_model = load_trt_model_latest()
     # Play games until GAMES_PER_CYCLE reached for all processes combined
     current_game = 0
@@ -51,15 +43,14 @@ def play_n_games(pid, model_init_semaphor, config, games_count):
                                 visit_count=visit_count)
         del images, terminal_values, visit_counts
         current_game += 1
+        gc.collect()
 
 def self_play(config):
     processes = {}
     with Manager() as manager:
         games_count = manager.Value('i', 0)
-        model_init_semaphor = manager.BoundedSemaphore(1) # One model being built at a time
-
         for pid in range(config.num_actors):
-            p = Process(target=play_n_games, args=(pid, model_init_semaphor, config, games_count,))
+            p = Process(target=play_n_games, args=(pid, config, games_count,))
             p.start()
             processes[pid] = p
 
