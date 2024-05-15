@@ -29,17 +29,16 @@ if os.path.exists(config.positions_usage_stats):
 if os.path.exists(config.training_info_stats):
     os.remove(config.training_info_stats)
 
-if not os.path.exists(config.seed_positions_dir):
-    os.makedirs(config.seed_positions_dir)
-    
-if not os.path.exists(config.seed_records_dir):
-    os.makedirs(config.seed_records_dir)
+if os.path.exists(config.sts_results_dir):
+    shutil.rmtree(config.sts_results_dir)
 
 os.makedirs(config.self_play_positions_dir)
 os.makedirs(config.tensorboard_log_dir)
 os.makedirs(config.training_records_dir)
 os.makedirs(config.keras_checkpoint_dir)
 os.makedirs(config.trt_checkpoint_dir)
+os.makedirs(config.sts_results_dir)
+
 
 model = generate_model()
 timenow = datetime.now().strftime("%d-%m-%Y_%H:%M:%S")

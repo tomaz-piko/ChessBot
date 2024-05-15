@@ -134,6 +134,12 @@ def uci_to_action(uci: str, player: bool):
     dropoff_row = rows_str.index(uci[3])
     promotion = uci[4] if len(uci) == 5 else None
 
+    if promotion:
+        if player == chess.WHITE:
+            assert not (pickup_row == 1 and dropoff_row == 0), "White can not promote from the second row"
+        else:
+            assert not (pickup_row == 1 and dropoff_row == 0), "Black can not promote from the seventh row"
+
     # Check possible knight landing squares
     for l, direction_long in enumerate(["N", "E", "S", "W"]):
         for s, direction_short in enumerate(["N", "E", "S", "W"]):

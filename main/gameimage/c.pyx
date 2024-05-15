@@ -43,9 +43,9 @@ cdef pieces_onehot(int[:,:] board_np_view, bint to_play):
     cdef Py_ssize_t i, j, p
     cdef Py_ssize_t _P = 6
     
-    for p in xrange(_P):  
-        for i in xrange(N):
-            for j in xrange(N):    
+    for p in range(_P):  
+        for i in range(N):
+            for j in range(N):    
                 if board_np_view[i, j] == p + 1:
                     onehot_w_view[p, i, j] = 1
                 elif board_np_view[i, j] == -(p + 1):
@@ -58,100 +58,93 @@ cdef pieces_onehot(int[:,:] board_np_view, bint to_play):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cpdef board_to_image(board):
+cpdef board_to_image(board, T, repetitions):
     cdef int N = 8
-    cdef int T = 8
-    cdef int M = 13
+    cdef int M = 6 * 2 + repetitions
     cdef int L = 5
-    cdef bint current_player = board.turn
+    cdef int num_planes = T * M + L
+    cdef bint current_player
     cdef np.ndarray image = np.zeros([T * M + L, N, N], dtype=DTYPE)
     cdef np.ndarray[DTYPE_t, ndim=2] board_np
     cdef np.ndarray[DTYPE_t, ndim=3] p1
     cdef np.ndarray[DTYPE_t, ndim=3] p2
-    cdef Py_ssize_t _T = 8
+    cdef Py_ssize_t _T = T
     cdef Py_ssize_t t, idx
 
     tmp = board.copy()
-    for t in xrange(_T):
-        idx = (T - t - 1) * M
+    for t in range(_T):
+        current_player = tmp.turn
+        idx = t * M 
         board_np = parse_piece_map(tmp.piece_map(), not current_player)
         p1, p2 = pieces_onehot(board_np, current_player)
         image[idx:idx+6, :, :] = p1
         image[idx + 6:idx+12, :, :] = p2
-        if tmp.is_repetition(2):
-            image[idx + 12, :, :] = 1
+        for i in range(repetitions):
+            if board.is_repetition(i + 2):
+                image[12 + i, :, :] = 1
         if len(tmp.move_stack) > 0:
             tmp.pop()
         else:
             break
-    #image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
-    image[104, :, :] = int(board.has_kingside_castling_rights(current_player))
-    image[105, :, :] = int(board.has_queenside_castling_rights(current_player))
-    image[106, :, :] = int(board.has_kingside_castling_rights(not current_player))
-    image[107, :, :] = int(board.has_queenside_castling_rights(not current_player))
-    image[108, :, :] = board.halfmove_clock
+    image[num_planes - 5, :, :] = int(board.has_kingside_castling_rights(board.turn))
+    image[num_planes - 4, :, :] = int(board.has_queenside_castling_rights(board.turn))
+    image[num_planes - 3, :, :] = int(board.has_kingside_castling_rights(not board.turn))
+    image[num_planes - 2, :, :] = int(board.has_queenside_castling_rights(not board.turn))
+    image[num_planes - 1, :, :] = board.halfmove_clock
     return image.astype(np.uint8)
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cdef copy_history(np.ndarray[DTYPE_t, ndim=3] new_image, np.ndarray[DTYPE_t, ndim=3] prev_image):
-    cdef np.ndarray[DTYPE_t, ndim=3] tmp
-    cdef Py_ssize_t T = 7
+cdef copy_history(np.ndarray[DTYPE_t, ndim=3] new_image, np.ndarray[DTYPE_t, ndim=3] prev_image, int T, int repetitions):
+    cdef Py_ssize_t _T = T
     cdef Py_ssize_t t, _from1, _from2, _to1, _to2
-    cdef Py_ssize_t M = 13
+    cdef Py_ssize_t M = 6 * 2 + repetitions
 
-    tmp = np.flip(prev_image, axis=1) # For channels first
-    tmp[0:91, :, :] = tmp[13:104, :, :]
-    for t in xrange(T):
-        _from1 = (t * M)
-        _from2 = (t * M) + 6
-        _to1 = (t * M) + 6
-        _to2 = (t * M) + 12
-        new_image[_from1:_to1, :, :] = tmp[_from2:_to2, :, :]
-        new_image[_from2:_to2, :, :] = tmp[_from1:_to1, :, :]
+    new_image[M:T*M, :, :] = prev_image[0:(T-1)*M, :, :]
+
     return new_image
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-cpdef update_image(board, prev_image):
+cpdef update_image(board, prev_image, T, repetitions):
     cdef int N = 8
-    cdef int T = 8
-    cdef int M = 13
+    cdef int M = 6 * 2 + repetitions
     cdef int L = 5
+    cdef int num_planes = T * M + L
     cdef bint current_player = board.turn
     cdef np.ndarray[DTYPE_t, ndim=3] p1
     cdef np.ndarray[DTYPE_t, ndim=3] p2
     cdef np.ndarray new_image = np.zeros(((T*M)+L, N, N), dtype=DTYPE)
     cdef np.ndarray board_np = parse_piece_map(board.piece_map(), not current_player)
 
-    new_image = copy_history(new_image, prev_image.astype(DTYPE))
+    new_image = copy_history(new_image, prev_image.astype(DTYPE), T, repetitions)
 
     # fill in missing info of current timestep
     p1, p2 = pieces_onehot(board_np, current_player)
-    new_image[91:97, :, :] = p1
-    new_image[97:103, :, :] = p2
-    if board.is_repetition(2):
-        new_image[103, :, :] = 1
-    #new_image[104, :, :] = 0 if current_player else 1 # 0 if white 1 if black
-    new_image[104, :, :] = int(board.has_kingside_castling_rights(current_player))
-    new_image[105, :, :] = int(board.has_queenside_castling_rights(current_player))
-    new_image[106, :, :] = int(board.has_kingside_castling_rights(not current_player))
-    new_image[107, :, :] = int(board.has_queenside_castling_rights(not current_player))
-    new_image[108, :, :] = board.halfmove_clock
+    new_image[0:6, :, :] = p1
+    new_image[6:12, :, :] = p2
+    for i in range(repetitions):
+        if board.is_repetition(i + 2):
+            new_image[12 + i, :, :] = 1
+    new_image[num_planes-5, :, :] = int(board.has_kingside_castling_rights(current_player))
+    new_image[num_planes-4, :, :] = int(board.has_queenside_castling_rights(current_player))
+    new_image[num_planes-3, :, :] = int(board.has_kingside_castling_rights(not current_player))
+    new_image[num_planes-2, :, :] = int(board.has_queenside_castling_rights(not current_player))
+    new_image[num_planes-1, :, :] = board.halfmove_clock
     return new_image.astype(np.uint8)
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cpdef convert_to_model_input(np.ndarray[np.uint8_t, ndim=3] image):
     cdef float max_val = 99.0
-    cdef Py_ssize_t last_plane = 108
-    cdef model_input = np.zeros([1, 109, 8, 8], dtype=np.float32)
-    cdef np.ndarray[np.uint8_t, ndim=3] image_view = image#.astype(DTYPE)
+    cdef Py_ssize_t last_plane = image.shape[0] - 1
+    cdef model_input = np.zeros([1, image.shape[0], 8, 8], dtype=np.float32)
+    cdef np.ndarray[np.uint8_t, ndim=3] image_view = image
     cdef float[:, :, :, :] model_input_view = model_input
     cdef Py_ssize_t i, j, k
-    for i in xrange(8):
-        for j in xrange(8):
-            for k in xrange(last_plane - 1):
+    for i in range(8):
+        for j in range(8):
+            for k in range(last_plane - 1):
                 model_input_view[0, k, i, j] = image_view[k, i, j]
             model_input_view[0, last_plane, i, j] = float(image_view[last_plane, i, j]) / max_val
     return model_input

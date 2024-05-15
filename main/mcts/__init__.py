@@ -88,8 +88,12 @@ class Node(object):
             return [move] + best_child.find_best_variation(game)
 
     def display_move_statistics(self, game: Game = None):
+        debug_nodes = [DebugNode(move, child) for move, child in self.children.items()]
+        sorted_children = sorted(debug_nodes, key=lambda x: x.N, reverse=True) # Sort by visit count
+        best_child = list(sorted_children)[0]
+
         print(f"Visits: {self.N}")
-        print(f"Summed value: {self.W:.6f}")
+        print(f"Value: {best_child.Q:.6f}")
         print(f"Evaluation: {self.init_eval:.6f}")
         if game is not None:
             tmp_game = game.clone()
@@ -98,20 +102,21 @@ class Node(object):
         print("%-13s %-7s %-28s %-18s %-14s %-14s %-14s %-14s" %("Move", "Visits", "NN Output", "Policy", "Prior", "Avg. value", "UCB", "Q+U"))
         print("-" * 130)
         # Todo: display best variation
-        debug_nodes = [DebugNode(move, child) for move, child in self.children.items()]
-        sorted_children = sorted(debug_nodes, key=lambda x: x.N, reverse=True) # Sort by visit count
+
         for child in sorted_children:
             print(child)
 
 
 def run_mcts(
         game: Game, 
-        config, 
+        config,
         trt_func,
-        num_simulations: int,
+        num_simulations: int = 0,
         time_limit: float = None,
         root: Node = None,
         **kwargs):
+    
+    assert num_simulations > 0 or time_limit is not None, "Either num_simulations or time_limit must be set"
     
     MIN_EXPLORE = kwargs.get("minimal_exploration", False)
     ENGINE_PLAY = kwargs.get("engine_play", False)
@@ -120,8 +125,8 @@ def run_mcts(
     
     start_time = time.time()
     if MIN_EXPLORE:
-        fpu_root, fpu_leaf = 1.0, 0.0
-        pb_c_factor_root, pb_c_factor_leaf = 1.0, 1.0
+        fpu_root, fpu_leaf = 0.0, 0.0
+        pb_c_factor_root, pb_c_factor_leaf = 0.0, 0.0
         policy_temp = 1.0
     else:
         fpu_root, fpu_leaf = config.fpu_root, config.fpu_leaf
@@ -129,15 +134,21 @@ def run_mcts(
         policy_temp = config.policy_temp
     pb_c_base = config.pb_c_base
     pb_c_init = config.pb_c_init
+    T = config.history_steps
+    R = config.repetition_planes
 
     rng = np.random.default_rng()
 
     if root is None:
         root = Node()
+    else:
+        root.init_eval = flip_value(root.init_eval)
+        for child in root.children.values():
+            child.fpu = config.fpu_root
 
     if root.is_leaf():
         if root.image is None:
-            root.image = board_to_image(game.board)
+            root.image = board_to_image(game.board, T, R)
         values, policy_logits = make_predictions(
                 config=config,
                 trt_func=trt_func,
@@ -152,7 +163,7 @@ def run_mcts(
         # If there is only one legal move, return it immediately
         move = list(root.children.keys())[0] 
         root[move].N += 1
-        child_visits = calculate_search_statistics(root) if RETURN_STATS else None
+        child_visits = calculate_search_statistics(root, config.num_actions) if RETURN_STATS else None
         if VERBOSE_MOVE:
             print(f"Time for MCTS: {time.time() - start_time:.2f}s")
             root.display_move_statistics(game)
@@ -195,6 +206,8 @@ def run_mcts(
             value, terminal = evaluate_game(tmp_game)
             # If the game is terminal, backup the value and continue with the next simulation
             if terminal:
+                if not ENGINE_PLAY and value == 0.5:
+                    value = value + 0.05
                 node.to_play = tmp_game.to_play()
                 update(search_path, flip_value(value))
                 node.init_eval = flip_value(value)
@@ -202,8 +215,8 @@ def run_mcts(
 
             # Expansion
             if node.image is None:
-                node.image = update_image(tmp_game.board, search_path[-2].image.copy())
-            expand_node(node, tmp_game, fpu_leaf)
+                node.image = update_image(tmp_game.board, search_path[-2].image.copy(), T, R)
+            expand_node(node, tmp_game, fpu_root if len(search_path) <= 2 else fpu_leaf)
             add_vloss(search_path)
 
             # Save the nodes to evaluate and the search paths
@@ -239,15 +252,17 @@ def run_mcts(
     else:
         move = select_move(root, rng, config.softmax_temp if game.history_len < config.num_mcts_sampling_moves else 0.0)
 
-    child_visits = calculate_search_statistics(root) if RETURN_STATS else None
+    child_visits = calculate_search_statistics(root, config.num_actions) if RETURN_STATS else None
     return move, root, child_visits
     
 
 def expand_node(node: Node, game: Game, fpu: float):
     node.to_play = game.to_play()
     for move in game.board.legal_moves:
-        node[move.uci()] = Node(fpu=fpu)
-
+        n = Node(fpu=fpu)
+        n.action = map_w[move.uci()] if node.to_play else map_b[move.uci()]
+        node[move.uci()] = n
+        
 
 def evaluate_node(node: Node, policy_logits, policy_temp):
     # Extract only the policy logits for the legal moves
@@ -280,7 +295,7 @@ def evaluate_game(game: Game):
 def make_predictions(config, trt_func, images, fill_buffer=False):
     images[:, -1] /= 99.0
     if fill_buffer:
-        fill = np.zeros((config.num_parallel_reads - len(images), 109, 8, 8), dtype=np.float32)
+        fill = np.zeros((config.num_parallel_reads - len(images), config.image_shape[0], 8, 8), dtype=np.float32)
         batch = np.concatenate((images, fill), axis=0)
         assert len(images) + len(fill) == config.num_parallel_reads, f"Expected {config.num_parallel_reads} images, got {len(images)}"
         assert len(batch) == config.num_parallel_reads, f"Expected {config.num_parallel_reads} images, got {len(batch)}"
@@ -365,8 +380,8 @@ def add_exploration_noise(config, node: Node, rng: np.random.Generator):
     for n, child in zip(noise, node.children.values()):
         child.P = child.P * (1 - frac) + n * frac
 
-def calculate_search_statistics(root: Node):
-    child_visits = np.zeros(4672, dtype=np.float32)
+def calculate_search_statistics(root: Node, num_actions: int):
+    child_visits = np.zeros(num_actions, dtype=np.float32)
     sum_visits = np.sum([child.N for child in root.children.values()])
     for uci_move, child in root.children.items():
         child_visits[map_w[uci_move] if root.to_play else map_b[uci_move]] = child.N / sum_visits

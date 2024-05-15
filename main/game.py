@@ -1,6 +1,3 @@
-import cppchess as chess
-from gameimage.c import board_to_image
-
 def _termination_str(termination: int) -> str:
     if termination == 0:
         return "Checkmate"
@@ -72,7 +69,7 @@ class Game:
             return True
         return False
     
-    def terminal_with_outcome(self) -> bool:
+    def terminal_with_outcome(self, claim_draw=True) -> bool:
         """Checks if the game is over. And sets the outcome.
 
         Returns:
@@ -80,7 +77,7 @@ class Game:
         """
         if self.board.ply() >= self.max_game_length:
             return True
-        outcome = self.board.outcome(claim_draw=True)
+        outcome = self.board.outcome(claim_draw=claim_draw)
         if outcome is not None:
             self.outcome = outcome
             return True
@@ -143,16 +140,3 @@ class Game:
             bool: Current player. True if white, False if black.
         """
         return self.board.turn
-    
-    @staticmethod
-    def image_sample():
-        """Returns a game position of of Ruy Lopez opening.
-
-        Returns:
-            NpArray: Game position of Ruy Lopez opening.
-        """
-        board = chess.Board()
-        moves = ["e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Ba4", "Nf6"]
-        for move in moves:
-            board.push_san(move)
-        return board_to_image(board)

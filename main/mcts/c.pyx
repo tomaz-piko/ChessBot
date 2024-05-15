@@ -8,6 +8,23 @@ from libc.math cimport log
 import time
 np.import_array()
 
+class DebugNode:
+    def __init__(self, move, node):
+        self.move = move
+        self.N = node.N
+        self.W = node.W
+        self.Q = node.Q
+        self.P = node.P
+
+    def __repr__(self) -> str:
+        def to_str(value):
+            if value < 0:
+                return f"{value:.6f}"
+            else:
+                return f" {value:.6f}"
+        
+        return "%-7s %-10s  %-13s  %-13s" %(self.move, f"N: {self.N}", f"(P:{to_str(self.P)})", f"(Q:{to_str(self.Q)})")
+
 class Node:
     @property
     def Q(self):
@@ -36,30 +53,52 @@ class Node:
     def is_leaf(self):
         return len(self.children) == 0
 
-    def describe(self):
-        # Sort children by visit count into new dict
-        sorted_children = {k: v for k, v in sorted(self.children.items(), key=lambda item: item[1].N, reverse=True)}
-        for move, child in sorted_children.items():
-            print(f"{move} -> P: {child.P:.6f}, Q: {child.Q:.6f}, W: {child.W:.6f}, N: {child.N}")
+    def find_best_variation(self, game):
+        best_child = max(self.children.values(), key=lambda child: child.N)
+        move = list(self.children.keys())[list(self.children.values()).index(best_child)]
+        game.make_move(move)
+        if best_child.is_leaf():
+            return [move]
+        else:
+            return [move] + best_child.find_best_variation(game)
+
+    def display_move_statistics(self, game: Game = None):
+        debug_nodes = [DebugNode(move, child) for move, child in self.children.items()]
+        sorted_children = sorted(debug_nodes, key=lambda x: x.N, reverse=True) # Sort by visit count
+        best_child = list(sorted_children)[0]
+
+        print(f"Visits: {self.N}")
+        print(f"Value: {best_child.Q:.6f}")
+        if game is not None:
+            tmp_game = game.clone()
+            print(f"Best variation: {' -> '.join(self.find_best_variation(tmp_game))}")
+
+        print("%-7s %-10s  %-13s  %-13s" %("Move", "Visits", "Prior", "Avg. value"))
+        print("-" * 130)
+        for child in sorted_children:
+            print(child)
 
 
 def run_mcts(
         game: Game, 
         config, 
         trt_func,
-        num_simulations: int,  
+        num_simulations: int = 0,  
         time_limit: float = None,
         root: Node = None,
         **kwargs):
 
+    assert num_simulations > 0 or time_limit is not None, "Either num_simulations or time_limit must be set"
+
     MIN_EXPLORE = kwargs.get("minimal_exploration", False)
     ENGINE_PLAY = kwargs.get("engine_play", False)
+    VERBOSE_MOVE = kwargs.get("verbose_move", False)
     RETURN_STATS = kwargs.get("return_statistics", False)
 
     start_time = time.time()
     if MIN_EXPLORE:
-        fpu_root, fpu_leaf = 1.0, 0.0
-        pb_c_factor_root, pb_c_factor_leaf = 1.0, 1.0
+        fpu_root, fpu_leaf = 0.0, 0.0
+        pb_c_factor_root, pb_c_factor_leaf = 0.0, 0.0
         policy_temp = 1.0
     else:
         fpu_root, fpu_leaf = config.fpu_root, config.fpu_leaf
@@ -67,15 +106,21 @@ def run_mcts(
         policy_temp = config.policy_temp
     pb_c_base = config.pb_c_base
     pb_c_init = config.pb_c_init
+    T = config.history_steps
+    R = config.repetition_planes
 
     rng = np.random.default_rng()
 
     if root is None:
         root = Node()
+    else:
+        root.init_eval = flip_value(root.init_eval)
+        for child in root.children.values():
+            child.fpu = config.fpu_root
 
     if root.is_leaf():
         if root.image is None:
-            root.image = board_to_image(game.board)
+            root.image = board_to_image(game.board, T, R)
         values, policy_logits = make_predictions(
                 config=config,
                 trt_func=trt_func,
@@ -89,7 +134,10 @@ def run_mcts(
         # If there is only one legal move, return it immediately
         move = list(root.children.keys())[0] 
         root[move].N += 1
-        child_visits = calculate_search_statistics(root) if RETURN_STATS else None
+        child_visits = calculate_search_statistics(root, config.num_actions) if RETURN_STATS else None
+        if VERBOSE_MOVE:
+            print(f"Time for MCTS: {time.time() - start_time:.2f}s")
+            root.display_move_statistics(game)
         return move, root, child_visits
 
     if not MIN_EXPLORE and not ENGINE_PLAY:
@@ -117,7 +165,6 @@ def run_mcts(
             # Traverse tree and find a leaf node
             try:
                 while not node.is_leaf():
-                    #pb_c_factor = pb_c_factor_root if node.is_root() else pb_c_factor_leaf
                     pb_c_factor = pb_c_factor_root if len(search_path) == 1 else pb_c_factor_leaf
                     move, node = select_leaf(node, pb_c_base=pb_c_base, pb_c_init=pb_c_init, pb_c_factor=pb_c_factor)
                     search_path.append(node)
@@ -130,14 +177,16 @@ def run_mcts(
             value, terminal = evaluate_game(tmp_game)
             # If the game is terminal, backup the value and continue with the next simulation
             if terminal:
+                if not ENGINE_PLAY and value == 0.5: # Discourage draws
+                    value = value + 0.05
                 node.to_play = tmp_game.to_play()
                 update(search_path, flip_value(value))
                 continue
 
             # Expansion
             if node.image is None:
-                node.image = update_image(tmp_game.board, search_path[-2].image.copy())
-            expand_node(node, tmp_game, fpu_leaf)
+                node.image = update_image(tmp_game.board, search_path[-2].image.copy(), T, R)
+            expand_node(node, tmp_game, fpu_root if len(search_path) <= 2 else fpu_leaf)
             add_vloss(search_path)
 
             # Save the nodes to evaluate and the search paths
@@ -162,12 +211,17 @@ def run_mcts(
 
         del nodes_to_eval, values, policy_logits, search_paths
     
+    end_time = time.time()
+    if VERBOSE_MOVE:
+        print(f"Time for MCTS: {end_time - start_time:.2f}s")
+        root.display_move_statistics(game)
+
     if ENGINE_PLAY:
         move = select_move(root, rng, 0.0)
     else:
         move = select_move(root, rng, config.softmax_temp if game.history_len < config.num_mcts_sampling_moves else 0.0)
 
-    child_visits = calculate_search_statistics(root) if RETURN_STATS else None
+    child_visits = calculate_search_statistics(root, config.num_actions) if RETURN_STATS else None
     return move, root, child_visits
 
 
@@ -212,7 +266,7 @@ def evaluate_game(game: Game):
 def make_predictions(config, trt_func, images, fill_buffer=False):
     images[:, -1] /= 99.0
     if fill_buffer:
-        fill = np.zeros((config.num_parallel_reads - len(images), 109, 8, 8), dtype=np.float32)
+        fill = np.zeros((config.num_parallel_reads - len(images), config.image_shape[0], 8, 8), dtype=np.float32)
         batch = np.concatenate((images, fill), axis=0)
         assert len(images) + len(fill) == config.num_parallel_reads, f"Expected {config.num_parallel_reads} images, got {len(images)}"
         assert len(batch) == config.num_parallel_reads, f"Expected {config.num_parallel_reads} images, got {len(batch)}"
@@ -300,8 +354,8 @@ def add_exploration_noise(config, node: Node, rng: np.random.Generator):
         child.P = child.P * (1 - frac) + n * frac
 
 
-cdef calculate_search_statistics(object root):
-    cdef np.ndarray[double, ndim=1] child_visits = np.zeros(4672, dtype=np.float64)
+cdef calculate_search_statistics(object root, int num_actions):
+    cdef np.ndarray[double, ndim=1] child_visits = np.zeros(num_actions, dtype=np.float64)
     cdef int sum_visits = 0
     cdef str move
     cdef object child

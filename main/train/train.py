@@ -9,9 +9,9 @@ import json
 import os
 import sys
 from functools import partial
-from game import Game
-from gameimage import convert_to_model_input
 import gc
+from .sts_test import do_strength_test
+from clr_callback import CyclicLR
 
 def lr_scheduler(epoch, lr):
     config = TrainingConfig()
@@ -22,10 +22,10 @@ def play_n_games(pid, config, games_count):
     if config.allow_gpu_growth:
         gpu_devices = tf.config.experimental.list_physical_devices('GPU')
         tf.config.experimental.set_memory_growth(gpu_devices[0], True)
-    from trt_funcs import load_trt_model_latest
+    from trt_funcs import load_trt_checkpoint_latest
 
     # Load model
-    trt_func, loaded_model = load_trt_model_latest()
+    trt_func, _ = load_trt_checkpoint_latest()
     # Play games until GAMES_PER_CYCLE reached for all processes combined
     current_game = 0
     while games_count.value < config.games_per_cycle:
@@ -115,7 +115,8 @@ def prepare_data(config, allow_training):
                 os.remove(f"{config.self_play_positions_dir}/{position}")
                 del positions_usage_counts[position]
             except:
-                print(f"Failed to remove {position}.")
+                continue
+    
     with open(config.positions_usage_stats, "wb") as f:
         pickle.dump(positions_usage_counts, f)
 
@@ -123,11 +124,12 @@ def prepare_data(config, allow_training):
 
 def train(config, current_step):
     import tensorflow as tf
+
     def read_tfrecord(example_proto):
         feature_description = {
-            "image": tf.io.FixedLenFeature([109, 8, 8], tf.float32),
+            "image": tf.io.FixedLenFeature([config.image_shape[0], 8, 8], tf.float32),
             "value_head": tf.io.FixedLenFeature([1], tf.float32),
-            "policy_head": tf.io.FixedLenFeature([4672], tf.float32),
+            "policy_head": tf.io.FixedLenFeature([config.num_actions], tf.float32),
         }
         example_proto = tf.io.parse_single_example(example_proto, feature_description)
         return example_proto["image"], (example_proto["value_head"], example_proto["policy_head"])
@@ -142,7 +144,7 @@ def train(config, current_step):
     
     def get_dataset(filenames, batch_size):
         dataset = load_dataset(filenames)
-        dataset = dataset.shuffle(buffer_size=2048)
+        dataset = dataset.shuffle(buffer_size=4096)
         dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
         dataset = dataset.batch(batch_size)
         return dataset
@@ -151,8 +153,12 @@ def train(config, current_step):
             filepath=f"{config.keras_checkpoint_dir}/checkpoint.model.keras",
             verbose=0,
         )
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=config.tensorboard_log_dir, histogram_freq=1)
-    lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=f"{config.tensorboard_log_dir}/fit/{config.model_name}", histogram_freq=1)
+    if config.learning_rate_schedule.lower() == "cyclic":
+        lr_callback = CyclicLR(base_lr=0.001, max_lr=0.006, step_size=2000., scale_fn=None, scale_mode='cycle')
+    elif config.learning_rate_schduler.lower() == "static":
+        lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
+
     callbacks = [checkpoint_callback, tensorboard_callback, lr_callback]
 
     # Get latest record file
@@ -178,7 +184,10 @@ def train(config, current_step):
     epoch_to = training_info_stats["current_epoch"] + num_epochs
 
     if os.path.exists(f"{config.keras_checkpoint_dir}/checkpoint.model.keras"):
-        model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/checkpoint.model.keras")
+        try:
+            model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/checkpoint.model.keras")
+        except:
+            model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/model.keras")
     else:
         model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/model.keras")
 
@@ -211,6 +220,14 @@ def save(config):
     trt_save_path = f"{config.trt_checkpoint_dir}/{datetime.now().strftime('%d-%m-%Y_%H:%M:%S')}/saved_model"
     keras_model_path = f"{config.keras_checkpoint_dir}/model.keras"
     save_trt_model(keras_model_path, trt_save_path, config.trt_precision_mode)
+
+def perform_sts_test(config):
+    import tensorflow as tf
+    sts_rating = do_strength_test(config.sts_time_limit, config.sts_num_agents, save_results=True)
+    # Save to tensorboard
+    sts_summary_writter = tf.summary.create_file_writer(f"{config.tensorboard_log_dir}/rating/{config.model_name}")
+    with sts_summary_writter.as_default():
+        tf.summary.scalar("ELO Rating", sts_rating, step=(i//config.sts_test_interval)+1)
 
 if __name__ == "__main__":
     config = TrainingConfig()
@@ -256,3 +273,9 @@ if __name__ == "__main__":
             p = Process(target=save, args=(config,))
             p.start()
             p.join()
+
+        if i > 0 and i % config.sts_test_interval == 0:
+            print(f"Running STS test.")
+            p = Process(target=perform_sts_test, args=(config,))
+            p.start()
+            p.join()       

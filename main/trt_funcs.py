@@ -44,14 +44,28 @@ def save_trt_model(model, trt_model_path, precision_mode=trt.TrtPrecisionMode.FP
     converter.save(trt_model_path)
 
 
-def load_trt_model(trt_model_path):
-    loaded_model = tf.saved_model.load(f"{trt_model_path}/saved_model")
+def load_trt_checkpoint(trt_model_dir: str):
+    """Loads a TensorRT model from the checkpoint directory.
+
+    Args:
+        trt_model_dir (str): The directory containing the TensorRT model. Minus the saved_model folder.
+
+    Returns:
+        trt_func, model: The TensorRT predict function and the loaded model.
+    """
+    config = TrainingConfig()
+    loaded_model = tf.saved_model.load(f"{config.trt_checkpoint_dir}/{trt_model_dir}/saved_model")
     trt_func = loaded_model.signatures['serving_default']
     return trt_func, loaded_model 
 
-def load_trt_model_latest():
+def load_trt_checkpoint_latest():
+    """Loads the latest TensorRT model from the checkpoint directory.
+
+    Returns:
+        trt_func, model: The TensorRT predict function and the loaded model.
+    """
     config = TrainingConfig()
     models = os.listdir(config.trt_checkpoint_dir)
     models.sort()
     latest = models[-1]
-    return load_trt_model(f"{config.trt_checkpoint_dir}/{latest}")
+    return load_trt_checkpoint(f"{latest}")
