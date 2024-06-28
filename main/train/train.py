@@ -2,7 +2,7 @@ from .config import TrainingConfig
 from .play_game import play_game
 import numpy as np
 from time import time
-from multiprocessing import Process, Event, Manager
+from multiprocessing import Process, Manager
 from datetime import datetime
 import pickle
 import json
@@ -11,11 +11,10 @@ import sys
 from functools import partial
 import gc
 from .sts_test import do_strength_test
-from .clr_callback import CyclicLR
 
 def lr_scheduler(epoch, lr):
     config = TrainingConfig()
-    return config.learning_rate["Static"]["lr"]
+    return config.learning_rate
 
 def play_n_games(pid, config, games_count):
     import tensorflow as tf
@@ -57,42 +56,18 @@ def self_play(config):
         for p in processes.values():
             p.join()
 
-def prepare_data(config, allow_training):
+def prepare_data(config):
     import tensorflow as tf
     from gameimage import convert_to_model_input
-
-    if os.path.exists(config.positions_usage_stats):
-        with open(config.positions_usage_stats, "rb") as f:
-            positions_usage_counts = pickle.load(f)
-    else:
-        positions_usage_counts = {}
     
     # All generated positions
     positions = os.listdir(config.self_play_positions_dir)
-    positions_usage_counts_left = np.array([config.max_trains_per_sample - positions_usage_counts.get(p, 0) for p in positions])
-    positions_usage_counts_left[positions_usage_counts_left < 0] = 0
-    total_available_positions = len(positions_usage_counts_left[positions_usage_counts_left > 0])
-    sum_counts = np.sum(positions_usage_counts_left)
-    if sum_counts < config.min_samples_per_cycle:
-        print(f"Less than {config.min_samples_per_cycle} usable positions available. Generating more games.")
-        allow_training.clear()
-        return
+    assert len(positions) > config.batch_size, "Not enough positions to generate training data. Run self_play first."
 
-    num_samples = config.min_samples_per_cycle
-
-    # Get indices of positions to use
-    new_positions_counter = 0
-    # Gives even more weight to positions that have been used less
-    if max(positions_usage_counts_left) > 1:
-        pi = (positions_usage_counts_left / sum_counts) ** (1 / 0.05)
-        pi /= np.sum(pi)
-    else:
-        pi = positions_usage_counts_left / sum_counts
-    positions_chosen = np.random.default_rng().choice(len(positions), size=num_samples, p=pi, replace=False)
-    for i in positions_chosen:
-        if positions[i] not in positions_usage_counts:
-            new_positions_counter += 1
-        positions_usage_counts[positions[i]] = positions_usage_counts.get(positions[i], 0) + 1
+    num_samples = int(len(positions) * config.sampling_ratio)
+    epochs_count = int(num_samples / config.batch_size)
+    num_samples = epochs_count * config.batch_size
+    positions_chosen = np.random.default_rng().choice(len(positions), size=num_samples, replace=False)
 
     # Generate TFRecords
     timestamp = datetime.now().strftime('%d%m%Y_%H%M%S')
@@ -114,65 +89,24 @@ def prepare_data(config, allow_training):
     # Clean up old records
     records = os.listdir(config.training_records_dir)
     records.sort()
-    while len(records) > config.keep_records_num:
+    while len(records) > 1:
         os.remove(f"{config.training_records_dir}/{records.pop(0)}")
-    
-    # Delete overused positions
-    to_delete = []
-    for file_name, usage_count in positions_usage_counts.items():
-        if usage_count >= config.max_trains_per_sample:
-            try:
-                to_delete.append(file_name)
-                if config.self_play_positions_backup_dir:
-                    os.rename(f"{config.self_play_positions_dir}/{file_name}", f"{config.self_play_positions_backup_dir}/{file_name}")
-                else:
-                    os.remove(f"{config.self_play_positions_dir}/{file_name}")
-            except:
-                continue
 
-    overused_counter = len(to_delete)
-    for file_name in to_delete:
+    for position in positions:
         try:
-            del positions_usage_counts[file_name]
-        except:
-            continue
-
-    # Delete overflown positions
-    to_delete = []
-    positions = os.listdir(config.self_play_positions_dir)
-    if len(positions) > config.keep_positions_num:
-        positions.sort(key=lambda x: os.path.getmtime(f"{config.self_play_positions_dir}/{x}"))
-        files_to_delete = positions[:len(positions) - config.keep_positions_num]
-        for file_name in files_to_delete:
-            try:
-                to_delete.append(file_name)
-                if config.self_play_positions_backup_dir:
-                    os.rename(f"{config.self_play_positions_dir}/{file_name}", f"{config.self_play_positions_backup_dir}/{file_name}")
-                else:
-                    os.remove(f"{config.self_play_positions_dir}/{file_name}")
-            except:
-                continue
-
-    overflown_counter = len(to_delete)
-    for file_name in to_delete:
-        try:
-            del positions_usage_counts[file_name]
+            if config.self_play_positions_backup_dir:
+                os.rename(f"{config.self_play_positions_dir}/{position}", f"{config.self_play_positions_backup_dir}/{position}")
+            else:
+                os.remove(f"{config.self_play_positions_dir}/{position}")
         except:
             continue
 
     print("--- DATA PREPERATION STATISTICS ---")
     print("===================================")
-    print(f"Picked {num_samples} samples out of {total_available_positions} available positions.")
-    print(f"Out of those {num_samples} samples, {new_positions_counter} were new positions.")
-    print(f"Deleted {overused_counter} overused positions.")
-    print(f"Deleted {overflown_counter} overflown positions.")
-    print(f"Total positions left: {len(positions_usage_counts)}.")
+    print(f"Picked {num_samples} samples out of {len(positions)} available positions.")
+    print(f"Generated data for {epochs_count} epochs with {config.batch_size} samples each.")
     print("===================================")
-    
-    with open(config.positions_usage_stats, "wb") as f:
-        pickle.dump(positions_usage_counts, f)
 
-    allow_training.set()
 
 def train(config, current_step):
     import tensorflow as tf
@@ -205,10 +139,12 @@ def train(config, current_step):
     records = os.listdir(config.training_records_dir)
     records.sort()
     latest_record = records[-1]
+    print(f"Scheduling training on {latest_record}.")
+
+    num_samples = int(latest_record.split("-")[-1].split(".")[0])
+    num_epochs = int(num_samples / config.batch_size)
+    print(f"Training on {num_samples} samples for {num_epochs} epochs.")
     
-    num_samples = config.min_samples_per_cycle
-    num_epochs = config.epochs_per_cycle
-    steps_per_epoch = config.batches_per_epoch
 
     if os.path.exists(config.training_info_stats):
         with open(config.training_info_stats, "rb") as f:
@@ -228,15 +164,7 @@ def train(config, current_step):
         verbose=0,
     )
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=f"{config.tensorboard_log_dir}/fit/{config.model_name}", histogram_freq=1)
-    if config.learning_rate_scheduler.lower() == "cyclic":
-        lr_callback = CyclicLR(
-            base_lr=config.learning_rate["Cyclic"]["base_lr"], 
-            max_lr=config.learning_rate["Cyclic"]["max_lr"], 
-            step_size=config.learning_rate["Cyclic"]["step_size"] * steps_per_epoch, 
-            mode='triangular',
-        )
-    elif config.learning_rate_scheduler.lower() == "static":
-        lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
+    lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
 
     callbacks = [checkpoint_callback, tensorboard_callback, lr_callback]
 
@@ -248,12 +176,11 @@ def train(config, current_step):
     else:
         model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/model.keras")
 
-    print(f"Training from epoch {epoch_from} to {epoch_to}. {num_samples} samples. {steps_per_epoch} steps per epoch.")
     model.fit(
         get_dataset(f"{config.training_records_dir}/{latest_record}", config.batch_size, buffer_size=num_samples),
         initial_epoch=epoch_from,
         epochs=epoch_to,
-        steps_per_epoch=steps_per_epoch,
+        steps_per_epoch=1,
         callbacks=callbacks,
         verbose=1)
     
@@ -286,9 +213,9 @@ def perform_sts_test(step, config):
     import os
     import tensorflow as tf
 
-    # If checkpoint adn sts test interval are not the same we make a temporary trt model
+    # If checkpoint and sts test interval are not the same we make a temporary trt model
     # At certain points of training it can happen that we could be making a checkpoint and a tmp model at the same time
-    # e.g. check_int = 9, sts_int = 3, at step 9 we would make a checkpoint and a tmp model which is a waste of resources 
+    # e.g. check_int = 9, sts_int = 3, at step 9 we would make a checkpoint and a tmp model which is a waste of resources
     if config.checkpoint_interval != config.sts_test_interval or step % config.checkpoint_interval != 0:
         model_path = "tmp"
     else:
@@ -317,11 +244,10 @@ if __name__ == "__main__":
             training_info_stats = json.load(f)
         initial_step = training_info_stats["last_finished_step"] + 1
 
-    allow_training = Event()
     i = initial_step
-    while i < config.num_cycles:
+    while True:
         # Generate N games
-        print(f"Scheduling self play {i} / {config.num_cycles} training steps.")
+        print(f"Scheduling self play training step {i}.")
         if not skip_selfplay_step: # Todo make option to skip multiple self play steps
             self_play(config)
         else:
@@ -329,11 +255,7 @@ if __name__ == "__main__":
 
         # Save as tensor records?
         print(f"Preparing data for training.")
-        prepare_data(config, allow_training)
-
-        if not allow_training.is_set():
-            print(f"Waiting for enough games to be played.")
-            continue
+        prepare_data(config)
 
         # Train on those games
         p = Process(target=train, args=(config, i))
