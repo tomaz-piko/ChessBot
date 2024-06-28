@@ -74,10 +74,12 @@ def _solve_tests(tests: list, results: dict, model_path: str ="latest", time_lim
     from game import Game
     from mcts.c import run_mcts
     from train.config import TrainingConfig
-    from trt_funcs import load_trt_checkpoint_latest, load_trt_checkpoint
+    from trt_funcs import load_trt_checkpoint_latest, load_trt_checkpoint, load_tmp_trt_checkpoint
 
     if model_path.lower() == "latest" or model_path == "lts":    
         trt_func, model = load_trt_checkpoint_latest()
+    elif model_path.lower() == "tmp":
+        trt_func, model = load_tmp_trt_checkpoint()
     else:
         trt_func, model = load_trt_checkpoint(model_path)
     config = TrainingConfig()
@@ -162,8 +164,8 @@ def do_strength_test(time_limit: float, num_actors: int, model_path: str = "late
 
 if __name__ == "__main__":
     config = TrainingConfig()
-    num_actors = config.sts_num_agents
     time_limit = config.sts_time_limit
+    num_actors = config.sts_num_agents
     
     args = sys.argv[1:]
     if len(args) > 0:

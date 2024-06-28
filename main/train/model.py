@@ -69,7 +69,6 @@ def generate_model():
         loss_weights={
             "value_head": config.value_head_loss_weight,
             "policy_head": config.policy_head_loss_weight
-        },
-        metrics=["accuracy"]
+        }
     )
     return model

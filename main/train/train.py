@@ -11,7 +11,7 @@ import sys
 from functools import partial
 import gc
 from .sts_test import do_strength_test
-from clr_callback import CyclicLR
+from .clr_callback import CyclicLR
 
 def lr_scheduler(epoch, lr):
     config = TrainingConfig()
@@ -39,7 +39,7 @@ def play_n_games(pid, config, games_count):
             # Save each position as npz
             np.savez_compressed(f"{config.self_play_positions_dir}/{pid}_{current_game}_{i}-{timestamp}.npz", 
                                 image=image, 
-                                terminal_value=[terminal_value], 
+                                terminal_value=[terminal_value],
                                 visit_count=visit_count)
         del images, terminal_values, visit_counts
         current_game += 1
@@ -71,16 +71,27 @@ def prepare_data(config, allow_training):
     positions = os.listdir(config.self_play_positions_dir)
     positions_usage_counts_left = np.array([config.max_trains_per_sample - positions_usage_counts.get(p, 0) for p in positions])
     positions_usage_counts_left[positions_usage_counts_left < 0] = 0
+    total_available_positions = len(positions_usage_counts_left[positions_usage_counts_left > 0])
     sum_counts = np.sum(positions_usage_counts_left)
-    if sum_counts < config.min_samples_for_training:
-        print(f"Less than {config.min_samples_for_training} usable positions available. Generating more games.")
+    if sum_counts < config.min_samples_per_cycle:
+        print(f"Less than {config.min_samples_per_cycle} usable positions available. Generating more games.")
         allow_training.clear()
         return
-    num_samples = config.min_samples_for_training * (sum_counts // config.min_samples_for_training)
-    num_samples = min(num_samples, config.max_samples_per_step)
+
+    num_samples = config.min_samples_per_cycle
+
     # Get indices of positions to use
-    positions_chosen = np.random.default_rng().choice(len(positions), size=num_samples, p=positions_usage_counts_left/sum_counts)
+    new_positions_counter = 0
+    # Gives even more weight to positions that have been used less
+    if max(positions_usage_counts_left) > 1:
+        pi = (positions_usage_counts_left / sum_counts) ** (1 / 0.05)
+        pi /= np.sum(pi)
+    else:
+        pi = positions_usage_counts_left / sum_counts
+    positions_chosen = np.random.default_rng().choice(len(positions), size=num_samples, p=pi, replace=False)
     for i in positions_chosen:
+        if positions[i] not in positions_usage_counts:
+            new_positions_counter += 1
         positions_usage_counts[positions[i]] = positions_usage_counts.get(positions[i], 0) + 1
 
     # Generate TFRecords
@@ -106,16 +117,57 @@ def prepare_data(config, allow_training):
     while len(records) > config.keep_records_num:
         os.remove(f"{config.training_records_dir}/{records.pop(0)}")
     
-    # Clean up overused positions
-    if len(positions) > config.keep_positions_num:
-        positions.sort(key=lambda x: os.path.getmtime(f"{config.self_play_positions_dir}/{x}"))
-        to_delete = positions[:len(positions) - config.keep_positions_num]
-        for position in to_delete:
+    # Delete overused positions
+    to_delete = []
+    for file_name, usage_count in positions_usage_counts.items():
+        if usage_count >= config.max_trains_per_sample:
             try:
-                os.remove(f"{config.self_play_positions_dir}/{position}")
-                del positions_usage_counts[position]
+                to_delete.append(file_name)
+                if config.self_play_positions_backup_dir:
+                    os.rename(f"{config.self_play_positions_dir}/{file_name}", f"{config.self_play_positions_backup_dir}/{file_name}")
+                else:
+                    os.remove(f"{config.self_play_positions_dir}/{file_name}")
             except:
                 continue
+
+    overused_counter = len(to_delete)
+    for file_name in to_delete:
+        try:
+            del positions_usage_counts[file_name]
+        except:
+            continue
+
+    # Delete overflown positions
+    to_delete = []
+    positions = os.listdir(config.self_play_positions_dir)
+    if len(positions) > config.keep_positions_num:
+        positions.sort(key=lambda x: os.path.getmtime(f"{config.self_play_positions_dir}/{x}"))
+        files_to_delete = positions[:len(positions) - config.keep_positions_num]
+        for file_name in files_to_delete:
+            try:
+                to_delete.append(file_name)
+                if config.self_play_positions_backup_dir:
+                    os.rename(f"{config.self_play_positions_dir}/{file_name}", f"{config.self_play_positions_backup_dir}/{file_name}")
+                else:
+                    os.remove(f"{config.self_play_positions_dir}/{file_name}")
+            except:
+                continue
+
+    overflown_counter = len(to_delete)
+    for file_name in to_delete:
+        try:
+            del positions_usage_counts[file_name]
+        except:
+            continue
+
+    print("--- DATA PREPERATION STATISTICS ---")
+    print("===================================")
+    print(f"Picked {num_samples} samples out of {total_available_positions} available positions.")
+    print(f"Out of those {num_samples} samples, {new_positions_counter} were new positions.")
+    print(f"Deleted {overused_counter} overused positions.")
+    print(f"Deleted {overflown_counter} overflown positions.")
+    print(f"Total positions left: {len(positions_usage_counts)}.")
+    print("===================================")
     
     with open(config.positions_usage_stats, "wb") as f:
         pickle.dump(positions_usage_counts, f)
@@ -142,33 +194,21 @@ def train(config, current_step):
         dataset = dataset.map(partial(read_tfrecord), num_parallel_calls=tf.data.AUTOTUNE)
         return dataset
     
-    def get_dataset(filenames, batch_size):
+    def get_dataset(filenames, batch_size, buffer_size=4096):
         dataset = load_dataset(filenames)
-        dataset = dataset.shuffle(buffer_size=4096)
+        dataset = dataset.shuffle(buffer_size=buffer_size)
         dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
         dataset = dataset.batch(batch_size)
         return dataset
-    
-    checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-            filepath=f"{config.keras_checkpoint_dir}/checkpoint.model.keras",
-            verbose=0,
-        )
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=f"{config.tensorboard_log_dir}/fit/{config.model_name}", histogram_freq=1)
-    if config.learning_rate_schedule.lower() == "cyclic":
-        lr_callback = CyclicLR(base_lr=0.001, max_lr=0.006, step_size=2000., scale_fn=None, scale_mode='cycle')
-    elif config.learning_rate_schduler.lower() == "static":
-        lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
-
-    callbacks = [checkpoint_callback, tensorboard_callback, lr_callback]
 
     # Get latest record file
     records = os.listdir(config.training_records_dir)
     records.sort()
     latest_record = records[-1]
     
-    num_samples = int(latest_record.split("-")[1].split(".")[0]) # Will always be a multiple of MIN_SAMPLES_FOR_TRAINING (but less/equal than MAX_SAMPLES_PER_STEP)
-    num_epochs = int(num_samples / config.min_samples_for_training)
-    steps_per_epoch = int(config.min_samples_for_training / config.batch_size)
+    num_samples = config.min_samples_per_cycle
+    num_epochs = config.epochs_per_cycle
+    steps_per_epoch = config.batches_per_epoch
 
     if os.path.exists(config.training_info_stats):
         with open(config.training_info_stats, "rb") as f:
@@ -183,6 +223,23 @@ def train(config, current_step):
     epoch_from = training_info_stats["current_epoch"]
     epoch_to = training_info_stats["current_epoch"] + num_epochs
 
+    checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+        filepath=f"{config.keras_checkpoint_dir}/checkpoint.model.keras",
+        verbose=0,
+    )
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=f"{config.tensorboard_log_dir}/fit/{config.model_name}", histogram_freq=1)
+    if config.learning_rate_scheduler.lower() == "cyclic":
+        lr_callback = CyclicLR(
+            base_lr=config.learning_rate["Cyclic"]["base_lr"], 
+            max_lr=config.learning_rate["Cyclic"]["max_lr"], 
+            step_size=config.learning_rate["Cyclic"]["step_size"] * steps_per_epoch, 
+            mode='triangular',
+        )
+    elif config.learning_rate_scheduler.lower() == "static":
+        lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_scheduler)
+
+    callbacks = [checkpoint_callback, tensorboard_callback, lr_callback]
+
     if os.path.exists(f"{config.keras_checkpoint_dir}/checkpoint.model.keras"):
         try:
             model = tf.keras.models.load_model(f"{config.keras_checkpoint_dir}/checkpoint.model.keras")
@@ -193,7 +250,7 @@ def train(config, current_step):
 
     print(f"Training from epoch {epoch_from} to {epoch_to}. {num_samples} samples. {steps_per_epoch} steps per epoch.")
     model.fit(
-        get_dataset(f"{config.training_records_dir}/{latest_record}", config.batch_size),
+        get_dataset(f"{config.training_records_dir}/{latest_record}", config.batch_size, buffer_size=num_samples),
         initial_epoch=epoch_from,
         epochs=epoch_to,
         steps_per_epoch=steps_per_epoch,
@@ -210,24 +267,39 @@ def train(config, current_step):
     # Save model
     model.save(f"{config.keras_checkpoint_dir}/model.keras")
 
-def save(config):
+def save(config, tmp=False):
     import tensorflow as tf
     if config.allow_gpu_growth:
         gpu_devices = tf.config.experimental.list_physical_devices('GPU')
         tf.config.experimental.set_memory_growth(gpu_devices[0], True)
     from trt_funcs import save_trt_model
 
-    trt_save_path = f"{config.trt_checkpoint_dir}/{datetime.now().strftime('%d-%m-%Y_%H:%M:%S')}/saved_model"
+    if not tmp:
+        trt_save_path = f"{config.trt_checkpoint_dir}/{datetime.now().strftime('%d-%m-%Y_%H:%M:%S')}/saved_model"
+    else:
+        trt_save_path = f"{config.tmp_trt_checkpoint_dir}/saved_model"
+        
     keras_model_path = f"{config.keras_checkpoint_dir}/model.keras"
     save_trt_model(keras_model_path, trt_save_path, config.trt_precision_mode)
 
-def perform_sts_test(config):
+def perform_sts_test(step, config):
+    import os
     import tensorflow as tf
-    sts_rating = do_strength_test(config.sts_time_limit, config.sts_num_agents, save_results=True)
+
+    # If checkpoint adn sts test interval are not the same we make a temporary trt model
+    # At certain points of training it can happen that we could be making a checkpoint and a tmp model at the same time
+    # e.g. check_int = 9, sts_int = 3, at step 9 we would make a checkpoint and a tmp model which is a waste of resources 
+    if config.checkpoint_interval != config.sts_test_interval or step % config.checkpoint_interval != 0:
+        model_path = "tmp"
+    else:
+        model_path = "lts"
+
+    sts_rating = do_strength_test(config.sts_time_limit, config.sts_num_agents, model_path=model_path, save_results=True)
+    count = len(os.listdir(config.sts_results_dir))
     # Save to tensorboard
     sts_summary_writter = tf.summary.create_file_writer(f"{config.tensorboard_log_dir}/rating/{config.model_name}")
     with sts_summary_writter.as_default():
-        tf.summary.scalar("ELO Rating", sts_rating, step=(i//config.sts_test_interval)+1)
+        tf.summary.scalar("ELO Rating", sts_rating, step=count)
 
 if __name__ == "__main__":
     config = TrainingConfig()
@@ -246,7 +318,8 @@ if __name__ == "__main__":
         initial_step = training_info_stats["last_finished_step"] + 1
 
     allow_training = Event()
-    for i in range(initial_step, config.num_cycles):
+    i = initial_step
+    while i < config.num_cycles:
         # Generate N games
         print(f"Scheduling self play {i} / {config.num_cycles} training steps.")
         if not skip_selfplay_step: # Todo make option to skip multiple self play steps
@@ -274,8 +347,14 @@ if __name__ == "__main__":
             p.start()
             p.join()
 
-        if i > 0 and i % config.sts_test_interval == 0:
-            print(f"Running STS test.")
-            p = Process(target=perform_sts_test, args=(config,))
+        if i % config.sts_test_interval == 0:
+            print(f"Converting model to TRT format.")
+            p = Process(target=save, args=(config, True))
             p.start()
-            p.join()       
+            p.join()
+            print(f"Running STS test.")
+            p = Process(target=perform_sts_test, args=(i, config,))
+            p.start()
+            p.join()
+
+        i += 1    

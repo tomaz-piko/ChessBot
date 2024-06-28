@@ -13,8 +13,17 @@ def _termination_str(termination: int) -> str:
         return "Fifty moves"
     elif termination == 6:
         return "Threefold repetition"
+    elif termination == 7:
+        return "Resignation"
+    elif termination == 8:
+        return "Tablebase outcome"
     else:
         return "Unknown"
+    
+class Outcome:
+    def __init__(self, winner: bool, termination: int):
+        self.winner = winner
+        self.termination = termination
 
 class Game:
     @property
@@ -46,16 +55,20 @@ class Game:
         else:
             return f"Draw: outcome={_termination_str(self.outcome.termination)}"
 
-    def __init__(self, board):
+    def __init__(self, board, resignable=False):
         """Constructor for Game class.
 
         Args:
             history (list, optional): _description_. Defaults to None.
         """
         self.board = board
-        self.max_game_length = 512 
+        self.max_game_length = 512
         self.outcome = None
-        self.search_statistics = []
+        self.resignable = resignable
+
+    def terminate(self, winner: bool, termination: int):
+        self.outcome = Outcome(winner=winner, termination=termination)
+
 
     def terminal(self) -> bool:
         """Checks if the game is over.
@@ -75,7 +88,9 @@ class Game:
         Returns:
             bool: True if the game is over, False otherwise.
         """
-        if self.board.ply() >= self.max_game_length:
+        if self.outcome is not None:
+            return True
+        elif self.board.ply() >= self.max_game_length:
             return True
         outcome = self.board.outcome(claim_draw=claim_draw)
         if outcome is not None:
@@ -115,6 +130,9 @@ class Game:
         Args:
             move (str): Move to make.
         """
+        if self.resignable and move is None: # Resignation
+            self.outcome = Outcome(winner=not self.board.turn, termination=7)
+            return None
         return self.board.push_uci(move)
 
     def make_move_san(self, move: str):

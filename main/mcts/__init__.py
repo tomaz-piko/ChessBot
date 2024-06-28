@@ -108,7 +108,7 @@ class Node(object):
 
 
 def run_mcts(
-        game: Game, 
+        game: Game,
         config,
         trt_func,
         num_simulations: int = 0,
@@ -126,7 +126,7 @@ def run_mcts(
     start_time = time.time()
     if MIN_EXPLORE:
         fpu_root, fpu_leaf = 0.0, 0.0
-        pb_c_factor_root, pb_c_factor_leaf = 0.0, 0.0
+        pb_c_factor_root, pb_c_factor_leaf = 1.0, 1.0
         policy_temp = 1.0
     else:
         fpu_root, fpu_leaf = config.fpu_root, config.fpu_leaf
@@ -136,6 +136,8 @@ def run_mcts(
     pb_c_init = config.pb_c_init
     T = config.history_steps
     R = config.repetition_planes
+    F = config.history_perspective_flip
+    discourage_draws_value = config.discourage_draws_value
 
     rng = np.random.default_rng()
 
@@ -148,7 +150,7 @@ def run_mcts(
 
     if root.is_leaf():
         if root.image is None:
-            root.image = board_to_image(game.board, T, R)
+            root.image = board_to_image(game.board, T, R, F)
         values, policy_logits = make_predictions(
                 config=config,
                 trt_func=trt_func,
@@ -186,7 +188,6 @@ def run_mcts(
         search_paths = []
         failsafe = 0
         while len(nodes_to_eval) < nodes_to_find and failsafe < nodes_to_find * 2:
-            failsafe += 1
             node = root
             search_path = [node]
             tmp_game = game.clone()
@@ -200,6 +201,7 @@ def run_mcts(
                     tmp_game.make_move(move)
             except:
                 # Selection process encountered a node where each child is waiting for evaluation
+                failsafe += 1
                 continue
 
             # Check if game ends here
@@ -207,16 +209,17 @@ def run_mcts(
             # If the game is terminal, backup the value and continue with the next simulation
             if terminal:
                 if not ENGINE_PLAY and value == 0.5:
-                    value = value + 0.05
+                    value = value + discourage_draws_value
                 node.to_play = tmp_game.to_play()
                 update(search_path, flip_value(value))
                 node.init_eval = flip_value(value)
+                failsafe += 1
                 continue
 
             # Expansion
             if node.image is None:
-                node.image = update_image(tmp_game.board, search_path[-2].image.copy(), T, R)
-            expand_node(node, tmp_game, fpu_root if len(search_path) <= 2 else fpu_leaf)
+                node.image = update_image(tmp_game.board, search_path[-2].image.copy(), T, R, F)
+            expand_node(node, tmp_game, fpu_leaf)
             add_vloss(search_path)
 
             # Save the nodes to evaluate and the search paths
@@ -225,6 +228,7 @@ def run_mcts(
             node.waiting_for_eval = True
 
         if not nodes_to_eval:
+            failsafe += 1
             continue
 
         values, policy_logits = make_predictions(
@@ -251,6 +255,8 @@ def run_mcts(
         move = select_move(root, rng, 0.0)
     else:
         move = select_move(root, rng, config.softmax_temp if game.history_len < config.num_mcts_sampling_moves else 0.0)
+        if game.resignable and game.history_len > config.resignation_move_limit and root[move].Q < config.resignation_threshold:
+            move = None
 
     child_visits = calculate_search_statistics(root, config.num_actions) if RETURN_STATS else None
     return move, root, child_visits
@@ -355,8 +361,8 @@ def select_leaf(node: Node, pb_c_base: float, pb_c_init: float, pb_c_factor: flo
 def UCB(cP: float, cN: int, pN: int, pb_c_base: float, pb_c_init: float, pb_c_factor: float):
     cpuct = (
         log((pN + pb_c_base + 1) / pb_c_base)
-        + pb_c_init
-    ) * pb_c_factor
+        * pb_c_factor
+    ) + pb_c_init
     return cpuct * cP * (pN**0.5 / (cN + 1))
 
 def select_move(node: Node, rng: np.random.Generator, temp = 0):

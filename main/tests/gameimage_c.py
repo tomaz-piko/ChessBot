@@ -7,8 +7,8 @@ config = TrainingConfig()
 
 T = config.history_steps
 R = config.repetition_planes
+flip = config.history_perspective_flip
 M = 6 * 2 + R
-
 
 # Ruy lopez opening from whites perspective
 # Turn 0: (e4) B    Turn 1: (e5) W    Turn 2: (Nf3) B   Turn 3: (Nc6) W   Turn 4: (Bb5) B   Turn 5: (a6)  W   Turn 6: (Ba4) B   Turn 7: (Nf6) W       
@@ -51,29 +51,28 @@ piece = {"pawn": 0, "knight": 1, "bishop": 2, "rook": 3, "queen": 4, "king": 5}
 class TestGameImage(unittest.TestCase):
     def test_image_shape(self):
         board = chess.Board()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
         self.assertEqual(image.shape, config.image_shape)
         board.push_san("e4")
-        image = gic.update_image(board, image, T, R)
+        image = gic.update_image(board, image, T, R, flip)
         self.assertEqual(image.shape, config.image_shape)
 
     def test_image_dtype(self):
         board = chess.Board()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
         self.assertEqual(image.dtype, np.uint8)
 
     def test_half_move_clock_is_last(self):
         board = chess.Board()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
         half_move_plane_idx = -1
         self.assertTrue(np.all(image[half_move_plane_idx] == 0))
 
     def test_ruy_lopez_white_t0(self): # Checking black and white pieces but from white perspective
         t = 0
         board = ruy_lopez.copy()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
 
-        # Check if the image is correct for step 1
         ts0_w = image[t*M:t*M+6]
         ts0_b = image[t*M+6:t*M+12]
 
@@ -98,10 +97,7 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts0_w[piece["pawn"]], pawns_w), f"PawnsW0:\nExpected:\n{pawns_w}\n\nGot:\n{ts0_w[piece['pawn']]}")
-        self.assertTrue(np.array_equal(ts0_b[piece["pawn"]], pawns_b), f"PawnsB0:\nExpected:\n{pawns_b}\n\nGot:\n{ts0_b[piece['pawn']]}")
-        
+     
         knights_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -123,9 +119,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts0_w[piece["knight"]], knights_w), f"KnightsW0:\nExpected:\n{knights_w}\n\nGot:\n{ts0_w[piece['knight']]}")
-        self.assertTrue(np.array_equal(ts0_b[piece["knight"]], knights_b), f"KnightsB0:\nExpected:\n{knights_b}\n\nGot:\n{ts0_b[piece['knight']]}")
 
         bishops_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -149,9 +142,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts0_w[piece["bishop"]], bishops_w), f"BishopsW0:\nExpected:\n{bishops_w}\n\nGot:\n{ts0_w[piece['bishop']]}")
-        self.assertTrue(np.array_equal(ts0_b[piece["bishop"]], bishops_b), f"BishopsB0:\nExpected:\n{bishops_b}\n\nGot:\n{ts0_b[piece['bishop']]}")
-
         rooks_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -173,9 +163,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts0_w[piece["rook"]], rooks_w), f"RooksW0:\nExpected:\n{rooks_w}\n\nGot:\n{ts0_w[piece['rook']]}")
-        self.assertTrue(np.array_equal(ts0_b[piece["rook"]], rooks_b), f"RooksB0:\nExpected:\n{rooks_b}\n\nGot:\n{ts0_b[piece['rook']]}")
 
         queens_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -199,9 +186,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts0_w[piece["queen"]], queens_w), f"QueenW0:\nExpected:\n{queens_w}\n\nGot:\n{ts0_w[piece['queen']]}")
-        self.assertTrue(np.array_equal(ts0_b[piece["queen"]], queens_b), f"QueenB0:\nExpected:\n{queens_b}\n\nGot:\n{ts0_b[piece['queen']]}")
-
         kings_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -224,6 +208,16 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
+        self.assertTrue(np.array_equal(ts0_w[piece["pawn"]], pawns_w), f"PawnsW0:\nExpected:\n{pawns_w}\n\nGot:\n{ts0_w[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["pawn"]], pawns_b), f"PawnsB0:\nExpected:\n{pawns_b}\n\nGot:\n{ts0_b[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["knight"]], knights_w), f"KnightsW0:\nExpected:\n{knights_w}\n\nGot:\n{ts0_w[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["knight"]], knights_b), f"KnightsB0:\nExpected:\n{knights_b}\n\nGot:\n{ts0_b[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["bishop"]], bishops_w), f"BishopsW0:\nExpected:\n{bishops_w}\n\nGot:\n{ts0_w[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["bishop"]], bishops_b), f"BishopsB0:\nExpected:\n{bishops_b}\n\nGot:\n{ts0_b[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["rook"]], rooks_w), f"RooksW0:\nExpected:\n{rooks_w}\n\nGot:\n{ts0_w[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["rook"]], rooks_b), f"RooksB0:\nExpected:\n{rooks_b}\n\nGot:\n{ts0_b[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["queen"]], queens_w), f"QueenW0:\nExpected:\n{queens_w}\n\nGot:\n{ts0_w[piece['queen']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["queen"]], queens_b), f"QueenB0:\nExpected:\n{queens_b}\n\nGot:\n{ts0_b[piece['queen']]}")
         self.assertTrue(np.array_equal(ts0_w[piece["king"]], kings_w), f"KingW0:\nExpected:\n{kings_w}\n\nGot:\n{ts0_w[piece['king']]}")
         self.assertTrue(np.array_equal(ts0_b[piece["king"]], kings_b), f"KingB0:\nExpected:\n{kings_b}\n\nGot:\n{ts0_b[piece['king']]}")
 
@@ -231,14 +225,11 @@ class TestGameImage(unittest.TestCase):
     def test_ruy_lopez_white_t1(self): # Checking black and white pieces but from white perspective
         t = 1
         board = ruy_lopez.copy()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
 
-        # Check if the image is correct for step 1
-        #ts1_w = image[13:19]
-        #ts1_b = image[19:25]
         ts1_b = image[t*M:t*M+6]
         ts1_w = image[t*M+6:t*M+12]
-
+        
         # At this point its blacks turn
         pawns_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -262,9 +253,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts1_w[piece["pawn"]], pawns_w), f"PawnsW1:\nExpected:\n{pawns_w}\n\nGot:\n{ts1_w[piece['pawn']]}")
-        self.assertTrue(np.array_equal(ts1_b[piece["pawn"]], pawns_b), f"PawnsB1:\nExpected:\n{pawns_b}\n\nGot:\n{ts1_b[piece['pawn']]}")
-
         knights_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -286,9 +274,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts1_w[piece["knight"]], knights_w), f"KnightsW1:\nExpected:\n{knights_w}\n\nGot:\n{ts1_w[piece['knight']]}")
-        self.assertTrue(np.array_equal(ts1_b[piece["knight"]], knights_b), f"KnightsB1:\nExpected:\n{knights_b}\n\nGot:\n{ts1_b[piece['knight']]}")
 
         bishops_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -312,9 +297,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts1_w[piece["bishop"]], bishops_w), f"BishopsW1:\nExpected:\n{bishops_w}\n\nGot:\n{ts1_w[piece['bishop']]}")
-        self.assertTrue(np.array_equal(ts1_b[piece["bishop"]], bishops_b), f"BishopsB1:\nExpected:\n{bishops_b}\n\nGot:\n{ts1_b[piece['bishop']]}")
-
         rooks_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -336,9 +318,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts1_w[piece["rook"]], rooks_w), f"RooksW1:\nExpected:\n{rooks_w}\n\nGot:\n{ts1_w[piece['rook']]}")
-        self.assertTrue(np.array_equal(ts1_b[piece["rook"]], rooks_b), f"RooksB1:\nExpected:\n{rooks_b}\n\nGot:\n{ts1_b[piece['rook']]}")
 
         queens_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -362,9 +341,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts1_w[piece["queen"]], queens_w), f"QueenW1:\nExpected:\n{queens_w}\n\nGot:\n{ts1_w[piece['queen']]}")
-        self.assertTrue(np.array_equal(ts1_b[piece["queen"]], queens_b), f"QueenB1:\nExpected:\n{queens_b}\n\nGot:\n{ts1_b[piece['queen']]}")
-
         kings_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -387,17 +363,37 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
+        # This step is only needed on turns with an odd index: e.g. t1, t3, ...
+        # Flipped perspective used to be default in the past
+        # This is the reason the next part of code is a bit counter intuitive
+        # If perspective flipping is disabled we flip the flipped perspective to get the correct perspective
+        if not config.history_perspective_flip:
+            ts1_b, ts1_w = ts1_w, ts1_b
+            pawns_w, pawns_b = np.flip(pawns_w, axis=0), np.flip(pawns_b, axis=0)
+            knights_w, knights_b = np.flip(knights_w, axis=0), np.flip(knights_b, axis=0)
+            bishops_w, bishops_b = np.flip(bishops_w, axis=0), np.flip(bishops_b, axis=0)
+            rooks_w, rooks_b = np.flip(rooks_w, axis=0), np.flip(rooks_b, axis=0)
+            queens_w, queens_b = np.flip(queens_w, axis=0), np.flip(queens_b, axis=0)
+            kings_w, kings_b = np.flip(kings_w, axis=0), np.flip(kings_b, axis=0)
+
+        self.assertTrue(np.array_equal(ts1_w[piece["pawn"]], pawns_w), f"PawnsW1:\nExpected:\n{pawns_w}\n\nGot:\n{ts1_w[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["pawn"]], pawns_b), f"PawnsB1:\nExpected:\n{pawns_b}\n\nGot:\n{ts1_b[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["knight"]], knights_w), f"KnightsW1:\nExpected:\n{knights_w}\n\nGot:\n{ts1_w[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["knight"]], knights_b), f"KnightsB1:\nExpected:\n{knights_b}\n\nGot:\n{ts1_b[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["bishop"]], bishops_w), f"BishopsW1:\nExpected:\n{bishops_w}\n\nGot:\n{ts1_w[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["bishop"]], bishops_b), f"BishopsB1:\nExpected:\n{bishops_b}\n\nGot:\n{ts1_b[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["rook"]], rooks_w), f"RooksW1:\nExpected:\n{rooks_w}\n\nGot:\n{ts1_w[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["rook"]], rooks_b), f"RooksB1:\nExpected:\n{rooks_b}\n\nGot:\n{ts1_b[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["queen"]], queens_w), f"QueenW1:\nExpected:\n{queens_w}\n\nGot:\n{ts1_w[piece['queen']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["queen"]], queens_b), f"QueenB1:\nExpected:\n{queens_b}\n\nGot:\n{ts1_b[piece['queen']]}")
         self.assertTrue(np.array_equal(ts1_w[piece["king"]], kings_w), f"KingW1:\nExpected:\n{kings_w}\n\nGot:\n{ts1_w[piece['king']]}")
         self.assertTrue(np.array_equal(ts1_b[piece["king"]], kings_b), f"KingB1:\nExpected:\n{kings_b}\n\nGot:\n{ts1_b[piece['king']]}")
 
     def test_ruy_lopez_white_t2(self): # Checking black and white pieces but from white perspective
         t=2
         board = ruy_lopez.copy()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
 
-        # Check if the image is correct for step 1
-        #ts2_w = image[26:32]
-        #ts2_b = image[32:38]
         ts2_w = image[t*M:t*M+6]
         ts2_b = image[t*M+6:t*M+12]
         
@@ -424,9 +420,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts2_w[piece["pawn"]], pawns_w), f"PawnsW2:\nExpected:\n{pawns_w}\n\nGot:\n{ts2_w[piece['pawn']]}")
-        self.assertTrue(np.array_equal(ts2_b[piece["pawn"]], pawns_b), f"PawnsB2:\nExpected:\n{pawns_b}\n\nGot:\n{ts2_b[piece['pawn']]}")
-
         knights_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -448,9 +441,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts2_w[piece["knight"]], knights_w), f"KnightsW2:\nExpected:\n{knights_w}\n\nGot:\n{ts2_w[piece['knight']]}")
-        self.assertTrue(np.array_equal(ts2_b[piece["knight"]], knights_b), f"KnightsB2:\nExpected:\n{knights_b}\n\nGot:\n{ts2_b[piece['knight']]}")
 
         bishops_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -474,9 +464,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts2_w[piece["bishop"]], bishops_w), f"BishopsW2:\nExpected:\n{bishops_w}\n\nGot:\n{ts2_w[piece['bishop']]}")
-        self.assertTrue(np.array_equal(ts2_b[piece["bishop"]], bishops_b), f"BishopsB2:\nExpected:\n{bishops_b}\n\nGot:\n{ts2_b[piece['bishop']]}")
-
         rooks_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -498,9 +485,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts2_w[piece["rook"]], rooks_w), f"RooksW2:\nExpected:\n{rooks_w}\n\nGot:\n{ts2_w[piece['rook']]}")
-        self.assertTrue(np.array_equal(ts2_b[piece["rook"]], rooks_b), f"RooksB2:\nExpected:\n{rooks_b}\n\nGot:\n{ts2_b[piece['rook']]}")
 
         queens_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -524,9 +508,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts2_w[piece["queen"]], queens_w), f"QueenW2:\nExpected:\n{queens_w}\n\nGot:\n{ts2_w[piece['queen']]}")
-        self.assertTrue(np.array_equal(ts2_b[piece["queen"]], queens_b), f"QueenB2:\nExpected:\n{queens_b}\n\nGot:\n{ts2_b[piece['queen']]}")
-
         kings_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -549,21 +530,27 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
+        self.assertTrue(np.array_equal(ts2_w[piece["pawn"]], pawns_w), f"PawnsW2:\nExpected:\n{pawns_w}\n\nGot:\n{ts2_w[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["pawn"]], pawns_b), f"PawnsB2:\nExpected:\n{pawns_b}\n\nGot:\n{ts2_b[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["knight"]], knights_w), f"KnightsW2:\nExpected:\n{knights_w}\n\nGot:\n{ts2_w[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["knight"]], knights_b), f"KnightsB2:\nExpected:\n{knights_b}\n\nGot:\n{ts2_b[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["bishop"]], bishops_w), f"BishopsW2:\nExpected:\n{bishops_w}\n\nGot:\n{ts2_w[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["bishop"]], bishops_b), f"BishopsB2:\nExpected:\n{bishops_b}\n\nGot:\n{ts2_b[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["rook"]], rooks_w), f"RooksW2:\nExpected:\n{rooks_w}\n\nGot:\n{ts2_w[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["rook"]], rooks_b), f"RooksB2:\nExpected:\n{rooks_b}\n\nGot:\n{ts2_b[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["queen"]], queens_w), f"QueenW2:\nExpected:\n{queens_w}\n\nGot:\n{ts2_w[piece['queen']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["queen"]], queens_b), f"QueenB2:\nExpected:\n{queens_b}\n\nGot:\n{ts2_b[piece['queen']]}")
         self.assertTrue(np.array_equal(ts2_w[piece["king"]], kings_w), f"KingW2:\nExpected:\n{kings_w}\n\nGot:\n{ts2_w[piece['king']]}")
         self.assertTrue(np.array_equal(ts2_b[piece["king"]], kings_b), f"KingB2:\nExpected:\n{kings_b}\n\nGot:\n{ts2_b[piece['king']]}")
 
     def test_ruy_lopez_white_t3(self): # Checking black and white pieces but from white perspective
         t=3
         board = ruy_lopez.copy()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
 
-        # Check if the image is correct for step 1
-        #ts3_w = image[39:45]
-        #ts3_b = image[45:51]
         ts3_b = image[t*M:t*M+6]
         ts3_w = image[t*M+6:t*M+12]
 
-        # At this point its blacks turn
         pawns_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -586,9 +573,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts3_w[piece["pawn"]], pawns_w), f"PawnsW3:\nExpected:\n{pawns_w}\n\nGot:\n{ts3_w[piece['pawn']]}")
-        self.assertTrue(np.array_equal(ts3_b[piece["pawn"]], pawns_b), f"PawnsB3:\nExpected:\n{pawns_b}\n\nGot:\n{ts3_b[piece['pawn']]}")
-
         knights_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -610,9 +594,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts3_w[piece["knight"]], knights_w), f"KnightsW3:\nExpected:\n{knights_w}\n\nGot:\n{ts3_w[piece['knight']]}")
-        self.assertTrue(np.array_equal(ts3_b[piece["knight"]], knights_b), f"KnightsB3:\nExpected:\n{knights_b}\n\nGot:\n{ts3_b[piece['knight']]}")
 
         bishops_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -636,9 +617,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts3_w[piece["bishop"]], bishops_w), f"BishopsW3:\nExpected:\n{bishops_w}\n\nGot:\n{ts3_w[piece['bishop']]}")
-        self.assertTrue(np.array_equal(ts3_b[piece["bishop"]], bishops_b), f"BishopsB3:\nExpected:\n{bishops_b}\n\nGot:\n{ts3_b[piece['bishop']]}")
-
         rooks_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -660,9 +638,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts3_w[piece["rook"]], rooks_w), f"RooksW3:\nExpected:\n{rooks_w}\n\nGot:\n{ts3_w[piece['rook']]}")
-        self.assertTrue(np.array_equal(ts3_b[piece["rook"]], rooks_b), f"RooksB3:\nExpected:\n{rooks_b}\n\nGot:\n{ts3_b[piece['rook']]}")
 
         queens_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -686,9 +661,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts3_w[piece["queen"]], queens_w), f"QueenW3:\nExpected:\n{queens_w}\n\nGot:\n{ts3_w[piece['queen']]}")
-        self.assertTrue(np.array_equal(ts3_b[piece["queen"]], queens_b), f"QueenB3:\nExpected:\n{queens_b}\n\nGot:\n{ts3_b[piece['queen']]}")
-
         kings_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -711,6 +683,29 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
+        # This step is only needed on turns with an odd index: e.g. t1, t3, ...
+        # Flipped perspective used to be default in the past
+        # This is the reason the next part of code is a bit counter intuitive
+        # If perspective flipping is disabled we flip the flipped perspective to get the correct perspective
+        if not config.history_perspective_flip:
+            ts3_b, ts3_w = ts3_w, ts3_b
+            pawns_w, pawns_b = np.flip(pawns_w, axis=0), np.flip(pawns_b, axis=0)
+            knights_w, knights_b = np.flip(knights_w, axis=0), np.flip(knights_b, axis=0)
+            bishops_w, bishops_b = np.flip(bishops_w, axis=0), np.flip(bishops_b, axis=0)
+            rooks_w, rooks_b = np.flip(rooks_w, axis=0), np.flip(rooks_b, axis=0)
+            queens_w, queens_b = np.flip(queens_w, axis=0), np.flip(queens_b, axis=0)
+            kings_w, kings_b = np.flip(kings_w, axis=0), np.flip(kings_b, axis=0)
+
+        self.assertTrue(np.array_equal(ts3_w[piece["pawn"]], pawns_w), f"PawnsW3:\nExpected:\n{pawns_w}\n\nGot:\n{ts3_w[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["pawn"]], pawns_b), f"PawnsB3:\nExpected:\n{pawns_b}\n\nGot:\n{ts3_b[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["knight"]], knights_w), f"KnightsW3:\nExpected:\n{knights_w}\n\nGot:\n{ts3_w[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["knight"]], knights_b), f"KnightsB3:\nExpected:\n{knights_b}\n\nGot:\n{ts3_b[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["bishop"]], bishops_w), f"BishopsW3:\nExpected:\n{bishops_w}\n\nGot:\n{ts3_w[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["bishop"]], bishops_b), f"BishopsB3:\nExpected:\n{bishops_b}\n\nGot:\n{ts3_b[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["rook"]], rooks_w), f"RooksW3:\nExpected:\n{rooks_w}\n\nGot:\n{ts3_w[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["rook"]], rooks_b), f"RooksB3:\nExpected:\n{rooks_b}\n\nGot:\n{ts3_b[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["queen"]], queens_w), f"QueenW3:\nExpected:\n{queens_w}\n\nGot:\n{ts3_w[piece['queen']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["queen"]], queens_b), f"QueenB3:\nExpected:\n{queens_b}\n\nGot:\n{ts3_b[piece['queen']]}")
         self.assertTrue(np.array_equal(ts3_w[piece["king"]], kings_w), f"KingW3:\nExpected:\n{kings_w}\n\nGot:\n{ts3_w[piece['king']]}")
         self.assertTrue(np.array_equal(ts3_b[piece["king"]], kings_b), f"KingB3:\nExpected:\n{kings_b}\n\nGot:\n{ts3_b[piece['king']]}")
 
@@ -718,11 +713,8 @@ class TestGameImage(unittest.TestCase):
     def test_ruy_lopez_black_t0(self):
         t = 0
         board = ruy_lopez2.copy()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
 
-        # Check if the image is correct for step 1
-        #ts0_b = image[0:6]
-        #ts0_w = image[6:12]
         ts0_b = image[t*M:t*M+6]
         ts0_w = image[t*M+6:t*M+12]
 
@@ -748,9 +740,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts0_b[piece["pawn"]], pawns_b), f"PawnsB0:\nExpected:\n{pawns_b}\n\nGot:\n{ts0_b[piece['pawn']]}")
-        self.assertTrue(np.array_equal(ts0_w[piece["pawn"]], pawns_w), f"PawnsW0:\nExpected:\n{pawns_w}\n\nGot:\n{ts0_w[piece['pawn']]}")
-
         knights_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -772,10 +761,7 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts0_b[piece["knight"]], knights_b), f"KnightsB0:\nExpected:\n{knights_b}\n\nGot:\n{ts0_b[piece['knight']]}")
-        self.assertTrue(np.array_equal(ts0_w[piece["knight"]], knights_w), f"KnightsW0:\nExpected:\n{knights_w}\n\nGot:\n{ts0_w[piece['knight']]}")
-
+        
         bishops_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -798,9 +784,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts0_b[piece["bishop"]], bishops_b), f"BishopsB0:\nExpected:\n{bishops_b}\n\nGot:\n{ts0_b[piece['bishop']]}")
-        self.assertTrue(np.array_equal(ts0_w[piece["bishop"]], bishops_w), f"BishopsW0:\nExpected:\n{bishops_w}\n\nGot:\n{ts0_w[piece['bishop']]}")
-
         rooks_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -822,10 +805,7 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts0_b[piece["rook"]], rooks_b), f"RooksB0:\nExpected:\n{rooks_b}\n\nGot:\n{ts0_b[piece['rook']]}")
-        self.assertTrue(np.array_equal(ts0_w[piece["rook"]], rooks_w), f"RooksW0:\nExpected:\n{rooks_w}\n\nGot:\n{ts0_w[piece['rook']]}")
-
+        
         queens_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -847,9 +827,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts0_b[piece["queen"]], queens_b), f"QueenB1:\nExpected:\n{queens_b}\n\nGot:\n{ts0_b[piece['queen']]}")
-        self.assertTrue(np.array_equal(ts0_w[piece["queen"]], queens_w), f"QueenW1:\nExpected:\n{queens_w}\n\nGot:\n{ts0_w[piece['queen']]}")
 
         kings_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -873,17 +850,24 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
+        self.assertTrue(np.array_equal(ts0_b[piece["pawn"]], pawns_b), f"PawnsB0:\nExpected:\n{pawns_b}\n\nGot:\n{ts0_b[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["pawn"]], pawns_w), f"PawnsW0:\nExpected:\n{pawns_w}\n\nGot:\n{ts0_w[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["knight"]], knights_b), f"KnightsB0:\nExpected:\n{knights_b}\n\nGot:\n{ts0_b[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["knight"]], knights_w), f"KnightsW0:\nExpected:\n{knights_w}\n\nGot:\n{ts0_w[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["bishop"]], bishops_b), f"BishopsB0:\nExpected:\n{bishops_b}\n\nGot:\n{ts0_b[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["bishop"]], bishops_w), f"BishopsW0:\nExpected:\n{bishops_w}\n\nGot:\n{ts0_w[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["rook"]], rooks_b), f"RooksB0:\nExpected:\n{rooks_b}\n\nGot:\n{ts0_b[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["rook"]], rooks_w), f"RooksW0:\nExpected:\n{rooks_w}\n\nGot:\n{ts0_w[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts0_b[piece["queen"]], queens_b), f"QueenB1:\nExpected:\n{queens_b}\n\nGot:\n{ts0_b[piece['queen']]}")
+        self.assertTrue(np.array_equal(ts0_w[piece["queen"]], queens_w), f"QueenW1:\nExpected:\n{queens_w}\n\nGot:\n{ts0_w[piece['queen']]}")
         self.assertTrue(np.array_equal(ts0_b[piece["king"]], kings_b), f"KingB1:\nExpected:\n{kings_b}\n\nGot:\n{ts0_b[piece['king']]}")
         self.assertTrue(np.array_equal(ts0_w[piece["king"]], kings_w), f"KingW1:\nExpected:\n{kings_w}\n\nGot:\n{ts0_w[piece['king']]}")
 
     def test_ruy_lopez_black_t1(self):
         t=1
         board = ruy_lopez2.copy()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
 
-        # Check if the image is correct for step 1
-        #ts1_w = image[13:19]
-        #ts1_b = image[19:25]
         ts1_w = image[t*M:t*M+6]
         ts1_b = image[t*M+6:t*M+12]
 
@@ -909,10 +893,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts1_b[piece["pawn"]], pawns_b), f"PawnsB2:\nExpected:\n{pawns_b}\n\nGot:\n{ts1_b[piece['pawn']]}")
-        self.assertTrue(np.array_equal(ts1_w[piece["pawn"]], pawns_w), f"PawnsW2:\nExpected:\n{pawns_w}\n\nGot:\n{ts1_w[piece['pawn']]}")
-
-
         knights_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -934,9 +914,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts1_b[piece["knight"]], knights_b), f"KnightsB2:\nExpected:\n{knights_b}\n\nGot:\n{ts1_b[piece['knight']]}")
-        self.assertTrue(np.array_equal(ts1_w[piece["knight"]], knights_w), f"KnightsW2:\nExpected:\n{knights_w}\n\nGot:\n{ts1_w[piece['knight']]}")
 
         bishops_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -960,9 +937,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts1_b[piece["bishop"]], bishops_b), f"BishopsB2:\nExpected:\n{bishops_b}\n\nGot:\n{ts1_b[piece['bishop']]}")
-        self.assertTrue(np.array_equal(ts1_w[piece["bishop"]], bishops_w), f"BishopsW2:\nExpected:\n{bishops_w}\n\nGot:\n{ts1_w[piece['bishop']]}")
-
         rooks_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -984,9 +958,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts1_b[piece["rook"]], rooks_b), f"RooksB2:\nExpected:\n{rooks_b}\n\nGot:\n{ts1_b[piece['rook']]}")
-        self.assertTrue(np.array_equal(ts1_w[piece["rook"]], rooks_w), f"RooksW2:\nExpected:\n{rooks_w}\n\nGot:\n{ts1_w[piece['rook']]}")
 
         queens_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1010,9 +981,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts1_b[piece["queen"]], queens_b), f"QueenB2:\nExpected:\n{queens_b}\n\nGot:\n{ts1_b[piece['queen']]}")
-        self.assertTrue(np.array_equal(ts1_w[piece["queen"]], queens_w), f"QueenW2:\nExpected:\n{queens_w}\n\nGot:\n{ts1_w[piece['queen']]}")
-
         kings_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1035,17 +1003,37 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
+        # This step is only needed on turns with an odd index: e.g. t1, t3, ...
+        # Flipped perspective used to be default in the past
+        # This is the reason the next part of code is a bit counter intuitive
+        # If perspective flipping is disabled we flip the flipped perspective to get the correct perspective
+        if not config.history_perspective_flip:
+            ts1_b, ts1_w = ts1_w, ts1_b
+            pawns_w, pawns_b = np.flip(pawns_w, axis=0), np.flip(pawns_b, axis=0)
+            knights_w, knights_b = np.flip(knights_w, axis=0), np.flip(knights_b, axis=0)
+            bishops_w, bishops_b = np.flip(bishops_w, axis=0), np.flip(bishops_b, axis=0)
+            rooks_w, rooks_b = np.flip(rooks_w, axis=0), np.flip(rooks_b, axis=0)
+            queens_w, queens_b = np.flip(queens_w, axis=0), np.flip(queens_b, axis=0)
+            kings_w, kings_b = np.flip(kings_w, axis=0), np.flip(kings_b, axis=0)
+
+        self.assertTrue(np.array_equal(ts1_b[piece["pawn"]], pawns_b), f"PawnsB2:\nExpected:\n{pawns_b}\n\nGot:\n{ts1_b[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["pawn"]], pawns_w), f"PawnsW2:\nExpected:\n{pawns_w}\n\nGot:\n{ts1_w[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["knight"]], knights_b), f"KnightsB2:\nExpected:\n{knights_b}\n\nGot:\n{ts1_b[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["knight"]], knights_w), f"KnightsW2:\nExpected:\n{knights_w}\n\nGot:\n{ts1_w[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["bishop"]], bishops_b), f"BishopsB2:\nExpected:\n{bishops_b}\n\nGot:\n{ts1_b[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["bishop"]], bishops_w), f"BishopsW2:\nExpected:\n{bishops_w}\n\nGot:\n{ts1_w[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["rook"]], rooks_b), f"RooksB2:\nExpected:\n{rooks_b}\n\nGot:\n{ts1_b[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["rook"]], rooks_w), f"RooksW2:\nExpected:\n{rooks_w}\n\nGot:\n{ts1_w[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts1_b[piece["queen"]], queens_b), f"QueenB2:\nExpected:\n{queens_b}\n\nGot:\n{ts1_b[piece['queen']]}")
+        self.assertTrue(np.array_equal(ts1_w[piece["queen"]], queens_w), f"QueenW2:\nExpected:\n{queens_w}\n\nGot:\n{ts1_w[piece['queen']]}")
         self.assertTrue(np.array_equal(ts1_b[piece["king"]], kings_b), f"KingB2:\nExpected:\n{kings_b}\n\nGot:\n{ts1_b[piece['king']]}")
         self.assertTrue(np.array_equal(ts1_w[piece["king"]], kings_w), f"KingW2:\nExpected:\n{kings_w}\n\nGot:\n{ts1_w[piece['king']]}")
 
     def test_ruy_lopez_black_t2(self):
         t=2
         board = ruy_lopez2.copy()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
 
-        # Check if the image is correct for step 1
-        #ts2_b = image[26:32]
-        #ts2_w = image[32:38]
         ts2_b = image[t*M:t*M+6]
         ts2_w = image[t*M+6:t*M+12]
 
@@ -1071,9 +1059,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts2_b[piece["pawn"]], pawns_b), f"PawnsB3:\nExpected:\n{pawns_b}\n\nGot:\n{ts2_b[piece['pawn']]}")
-        self.assertTrue(np.array_equal(ts2_w[piece["pawn"]], pawns_w), f"PawnsW3:\nExpected:\n{pawns_w}\n\nGot:\n{ts2_w[piece['pawn']]}")
-
         knights_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1095,9 +1080,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts2_b[piece["knight"]], knights_b), f"KnightsB3:\nExpected:\n{knights_b}\n\nGot:\n{ts2_b[piece['knight']]}")
-        self.assertTrue(np.array_equal(ts2_w[piece["knight"]], knights_w), f"KnightsW3:\nExpected:\n{knights_w}\n\nGot:\n{ts2_w[piece['knight']]}")
 
         bishops_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1121,9 +1103,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts2_b[piece["bishop"]], bishops_b), f"BishopsB3:\nExpected:\n{bishops_b}\n\nGot:\n{ts2_b[piece['bishop']]}")
-        self.assertTrue(np.array_equal(ts2_w[piece["bishop"]], bishops_w), f"BishopsW3:\nExpected:\n{bishops_w}\n\nGot:\n{ts2_w[piece['bishop']]}")
-
         rooks_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1145,9 +1124,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts2_b[piece["rook"]], rooks_b), f"RooksB3:\nExpected:\n{rooks_b}\n\nGot:\n{ts2_b[piece['rook']]}")
-        self.assertTrue(np.array_equal(ts2_w[piece["rook"]], rooks_w), f"RooksW3:\nExpected:\n{rooks_w}\n\nGot:\n{ts2_w[piece['rook']]}")
 
         queens_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1171,9 +1147,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts2_b[piece["queen"]], queens_b), f"QueenB3:\nExpected:\n{queens_b}\n\nGot:\n{ts2_b[piece['queen']]}")
-        self.assertTrue(np.array_equal(ts2_w[piece["queen"]], queens_w), f"QueenW3:\nExpected:\n{queens_w}\n\nGot:\n{ts2_w[piece['queen']]}")
-
         kings_b = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1196,17 +1169,23 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
+        self.assertTrue(np.array_equal(ts2_b[piece["pawn"]], pawns_b), f"PawnsB3:\nExpected:\n{pawns_b}\n\nGot:\n{ts2_b[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["pawn"]], pawns_w), f"PawnsW3:\nExpected:\n{pawns_w}\n\nGot:\n{ts2_w[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["knight"]], knights_b), f"KnightsB3:\nExpected:\n{knights_b}\n\nGot:\n{ts2_b[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["knight"]], knights_w), f"KnightsW3:\nExpected:\n{knights_w}\n\nGot:\n{ts2_w[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["bishop"]], bishops_b), f"BishopsB3:\nExpected:\n{bishops_b}\n\nGot:\n{ts2_b[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["bishop"]], bishops_w), f"BishopsW3:\nExpected:\n{bishops_w}\n\nGot:\n{ts2_w[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["rook"]], rooks_b), f"RooksB3:\nExpected:\n{rooks_b}\n\nGot:\n{ts2_b[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["rook"]], rooks_w), f"RooksW3:\nExpected:\n{rooks_w}\n\nGot:\n{ts2_w[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts2_b[piece["queen"]], queens_b), f"QueenB3:\nExpected:\n{queens_b}\n\nGot:\n{ts2_b[piece['queen']]}")
+        self.assertTrue(np.array_equal(ts2_w[piece["queen"]], queens_w), f"QueenW3:\nExpected:\n{queens_w}\n\nGot:\n{ts2_w[piece['queen']]}")
         self.assertTrue(np.array_equal(ts2_b[piece["king"]], kings_b), f"KingB3:\nExpected:\n{kings_b}\n\nGot:\n{ts2_b[piece['king']]}")
         self.assertTrue(np.array_equal(ts2_w[piece["king"]], kings_w), f"KingW3:\nExpected:\n{kings_w}\n\nGot:\n{ts2_w[piece['king']]}")
 
     def test_ruy_lopez_black_t3(self):
         t=3
         board = ruy_lopez2.copy()
-        image = gic.board_to_image(board, T, R)
-
-        # Check if the image is correct for step 1
-        #ts3_b = image[39:45]
-        #ts3_w = image[45:51]
+        image = gic.board_to_image(board, T, R, flip)
 
         ts3_w = image[t*M:t*M+6]
         ts3_b = image[t*M+6:t*M+12]
@@ -1233,9 +1212,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts3_b[piece["pawn"]], pawns_b), f"PawnsB4:\nExpected:\n{pawns_b}\n\nGot:\n{ts3_b[piece['pawn']]}")
-        self.assertTrue(np.array_equal(ts3_w[piece["pawn"]], pawns_w), f"PawnsW4:\nExpected:\n{pawns_w}\n\nGot:\n{ts3_w[piece['pawn']]}")
-
         knights_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1257,9 +1233,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts3_b[piece["knight"]], knights_b), f"KnightsB4:\nExpected:\n{knights_b}\n\nGot:\n{ts3_b[piece['knight']]}")
-        self.assertTrue(np.array_equal(ts3_w[piece["knight"]], knights_w), f"KnightsW4:\nExpected:\n{knights_w}\n\nGot:\n{ts3_w[piece['knight']]}")
 
         bishops_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1283,9 +1256,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
-        self.assertTrue(np.array_equal(ts3_b[piece["bishop"]], bishops_b), f"BishopsB4:\nExpected:\n{bishops_b}\n\nGot:\n{ts3_b[piece['bishop']]}")
-        self.assertTrue(np.array_equal(ts3_w[piece["bishop"]], bishops_w), f"BishopsW4:\nExpected:\n{bishops_w}\n\nGot:\n{ts3_w[piece['bishop']]}")
-
         rooks_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1307,10 +1277,7 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts3_b[piece["rook"]], rooks_b), f"RooksB4:\nExpected:\n{rooks_b}\n\nGot:\n{ts3_b[piece['rook']]}")
-        self.assertTrue(np.array_equal(ts3_w[piece["rook"]], rooks_w), f"RooksW4:\nExpected:\n{rooks_w}\n\nGot:\n{ts3_w[piece['rook']]}")
-
+        
         queens_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1332,9 +1299,6 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
-
-        self.assertTrue(np.array_equal(ts3_b[piece["queen"]], queens_b), f"QueenB4:\nExpected:\n{queens_b}\n\nGot:\n{ts3_b[piece['queen']]}")
-        self.assertTrue(np.array_equal(ts3_w[piece["queen"]], queens_w), f"QueenW4:\nExpected:\n{queens_w}\n\nGot:\n{ts3_w[piece['queen']]}")
 
         kings_w = np.array([
             [0, 0, 0, 0, 0, 0, 0, 0],
@@ -1358,17 +1322,59 @@ class TestGameImage(unittest.TestCase):
             [0, 0, 0, 0, 0, 0, 0, 0],
         ])
 
+        # This step is only needed on turns with an odd index: e.g. t1, t3, ...
+        # Flipped perspective used to be default in the past
+        # This is the reason the next part of code is a bit counter intuitive
+        # If perspective flipping is disabled we flip the flipped perspective to get the correct perspective
+        if not config.history_perspective_flip:
+            ts3_b, ts3_w = ts3_w, ts3_b
+            pawns_w, pawns_b = np.flip(pawns_w, axis=0), np.flip(pawns_b, axis=0)
+            knights_w, knights_b = np.flip(knights_w, axis=0), np.flip(knights_b, axis=0)
+            bishops_w, bishops_b = np.flip(bishops_w, axis=0), np.flip(bishops_b, axis=0)
+            rooks_w, rooks_b = np.flip(rooks_w, axis=0), np.flip(rooks_b, axis=0)
+            queens_w, queens_b = np.flip(queens_w, axis=0), np.flip(queens_b, axis=0)
+            kings_w, kings_b = np.flip(kings_w, axis=0), np.flip(kings_b, axis=0)
+
+        self.assertTrue(np.array_equal(ts3_b[piece["pawn"]], pawns_b), f"PawnsB4:\nExpected:\n{pawns_b}\n\nGot:\n{ts3_b[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["pawn"]], pawns_w), f"PawnsW4:\nExpected:\n{pawns_w}\n\nGot:\n{ts3_w[piece['pawn']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["knight"]], knights_b), f"KnightsB4:\nExpected:\n{knights_b}\n\nGot:\n{ts3_b[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["knight"]], knights_w), f"KnightsW4:\nExpected:\n{knights_w}\n\nGot:\n{ts3_w[piece['knight']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["bishop"]], bishops_b), f"BishopsB4:\nExpected:\n{bishops_b}\n\nGot:\n{ts3_b[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["bishop"]], bishops_w), f"BishopsW4:\nExpected:\n{bishops_w}\n\nGot:\n{ts3_w[piece['bishop']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["rook"]], rooks_b), f"RooksB4:\nExpected:\n{rooks_b}\n\nGot:\n{ts3_b[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["rook"]], rooks_w), f"RooksW4:\nExpected:\n{rooks_w}\n\nGot:\n{ts3_w[piece['rook']]}")
+        self.assertTrue(np.array_equal(ts3_b[piece["queen"]], queens_b), f"QueenB4:\nExpected:\n{queens_b}\n\nGot:\n{ts3_b[piece['queen']]}")
+        self.assertTrue(np.array_equal(ts3_w[piece["queen"]], queens_w), f"QueenW4:\nExpected:\n{queens_w}\n\nGot:\n{ts3_w[piece['queen']]}")
         self.assertTrue(np.array_equal(ts3_b[piece["king"]], kings_b), f"KingB4:\nExpected:\n{kings_b}\n\nGot:\n{ts3_b[piece['king']]}")
         self.assertTrue(np.array_equal(ts3_w[piece["king"]], kings_w), f"KingW4:\nExpected:\n{kings_w}\n\nGot:\n{ts3_w[piece['king']]}")
+
+
+    def test_last_t_not_empty(self):
+        t = T - 1
+        board = ruy_lopez.copy()
+        image = gic.board_to_image(board, T, R, flip)
+        ts = image[t*M:t*M+12] # p1 and p2 combined
+        self.assertTrue(np.count_nonzero(ts) > 0, f"LastTNotEmpty:\nExpected: > 0\n\nGot: {np.count_nonzero(ts)}")
+
+
+    def test_last_t_not_empty_update(self):
+        t = T - 1
+        board = ruy_lopez.copy()
+        move = board.pop()
+        image = gic.board_to_image(board, T, R, flip)
+        board.push_uci(move.uci())
+        image_updated = gic.update_image(board, image, T, R, flip)
+        ts = image_updated[t*M:t*M+12] # p1 and p2 combined
+        self.assertTrue(np.count_nonzero(ts) > 0, f"LastTNotEmpty:\nExpected: > 0\n\nGot: {np.count_nonzero(ts)}")
 
 
     def test_image_update_white(self):
         board = ruy_lopez.copy()
         move = board.pop()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
         board.push_uci(move.uci())
-        image_c = gic.board_to_image(board, T, R)
-        image_t = gic.update_image(board, image, T, R)
+        image_c = gic.board_to_image(board, T, R, flip)
+        image_t = gic.update_image(board, image, T, R, flip)
         for i in range(config.image_shape[0]):
             self.assertTrue(np.array_equal(image_c[i], image_t[i]), f"ImageUpdate:\nExpected:\n{image_c[i]}\n\nGot:\n{image_t[i]}\n\nIndex: {i}")
         
@@ -1376,12 +1382,57 @@ class TestGameImage(unittest.TestCase):
     def test_image_update_black(self):
         board = ruy_lopez2.copy()
         move = board.pop()
-        image = gic.board_to_image(board, T, R)
+        image = gic.board_to_image(board, T, R, flip)
         board.push_uci(move.uci())
-        image_c = gic.board_to_image(board, T, R)
-        image_t = gic.update_image(board, image, T, R)
+        image_c = gic.board_to_image(board, T, R, flip)
+        image_t = gic.update_image(board, image, T, R, flip)
         for i in range(config.image_shape[0]):
             self.assertTrue(np.array_equal(image_c[i], image_t[i]), f"ImageUpdate:\nExpected:\n{image_c[i]}\n\nGot:\n{image_t[i]}\n\nIndex: {i}")
+
+
+    def test_update_not_changing_original(self):
+        board = ruy_lopez.copy()
+        move = board.pop()
+        image = gic.board_to_image(board, T, R, flip)
+        image_c = image.copy()
+        board.push_uci(move.uci())
+        image_u = gic.update_image(board, image, T, R, flip)
+        # Check if original image remained unchanged
+        for i in range(config.image_shape[0]):
+            self.assertTrue(np.array_equal(image[i], image_c[i]), f"ImageUpdate:\nExpected:\n{image[i]}\n\nGot:\n{image_c[i]}\n\nIndex: {i}")
+
+    def test_image_to_model_input_conversion(self):
+        board = ruy_lopez.copy()
+        image = gic.board_to_image(board, T, R, flip)
+        model_input = gic.convert_to_model_input(image.copy())
+        # Test all but last plane for equality
+        self.assertEqual(np.expand_dims(image, 0).shape, model_input.shape, f"ImageToModelInput:\nExpected:\n{np.expand_dims(image, 0).shape}\n\nGot:\n{model_input.shape}")
+        for i in range(config.image_shape[0] - 1):
+            self.assertTrue(np.array_equal(model_input[0, i].astype(np.uint8), image[i]), f"ImageToModelInput:\nExpected:\n{image[i]}\n\nGot:\n{model_input[0, i].astype(np.uint8)}\n\nIndex: {i}")
+        half_move_value = board.halfmove_clock / 99.0
+        self.assertTrue(np.all(model_input[0, -1] == half_move_value), f"ImageToModelInput:\nExpected:\n{half_move_value}\n\nGot:\n{model_input[0, -1]}")
+
+
+    def test_conversion_not_changing_original(self):
+        board = ruy_lopez.copy()
+        image = gic.board_to_image(board, T, R, flip)
+        image_c = image.copy()
+        model_input = gic.convert_to_model_input(image)
+        # Check if original image remained unchanged
+        for i in range(config.image_shape[0]):
+            self.assertTrue(np.array_equal(image[i], image_c[i]), f"ConversionNotChangingOriginal:\nExpected:\n{image[i]}\n\nGot:\n{image_c[i]}\n\nIndex: {i}")
+
+
+    def test_custom_expand_validity(self):
+        board = ruy_lopez.copy()
+        image = gic.board_to_image(board, T, R, flip)
+        model_input = gic.convert_to_model_input(image.copy()).astype(np.uint8)
+        image_ext = np.expand_dims(image, 0)
+        self.assertEqual(model_input.shape, image_ext.shape, f"CustomExpandValidity:\nExpected:\n{image_ext.shape}\n\nGot:\n{model_input.shape}")
+        t = model_input[0]
+        c = image_ext[0]
+        for i in range(config.image_shape[0] - 1):
+            self.assertTrue(np.array_equal(t[i], c[i]), f"CustomExpandValidity:\nExpected:\n{c[i]}\n\nGot:\n{t[i]}\n\nIndex: {i}")
 
 
 if __name__ == '__main__':

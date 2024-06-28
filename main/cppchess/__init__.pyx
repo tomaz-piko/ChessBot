@@ -133,7 +133,13 @@ cdef class Board:
         while it != piece_map.end():
             piece = Piece(deref(it).second.piece_type, deref(it).second.color)
             yield (<int>deref(it).first, piece)
-            postinc(it)    
+            postinc(it)
+
+    def piece_at(self, square):
+        cdef optional[_Piece] piece = self.board_ptr.piece_at(square)
+        if not piece.has_value():
+            return None
+        return Piece(piece.value().piece_type, piece.value().color) 
 
     def pop(self):
         cdef unique_ptr[_Move] move = make_unique[_Move](self.board_ptr.pop())

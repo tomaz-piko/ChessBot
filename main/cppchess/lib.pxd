@@ -96,6 +96,7 @@ cdef extern from "./src/chess.h" namespace "chess":
         bint has_kingside_castling_rights(_Color)
         bint has_queenside_castling_rights(_Color)
         unordered_map[_Square, _Piece] piece_map(_Bitboard)
+        optional[_Piece] piece_at(_Square)
         _LegalMoveGenerator legal_moves()
         vector[_Move] generate_legal_moves(_Bitboard, _Bitboard)
         bint is_legal(_Move)

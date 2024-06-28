@@ -26,29 +26,31 @@ def parse_piece_map(pieces_map: dict, flip: bool):
         board_np[i, j] = pieces[piece.symbol()]
     return board_np
 
-def pieces_onehot(board_np: np.ndarray, to_play: bool):
+def pieces_onehot(board_np: np.ndarray, current_player: bool):
     onehot_w = np.zeros((6, N, N), dtype=dtype)
     onehot_b = np.zeros((6, N, N), dtype=dtype)
     for i in range(6):
         onehot_w[i, :, :] = board_np == i + 1
         onehot_b[i, :, :] = board_np == -(i + 1)
-    if to_play: # If player one is white
+    if current_player: # Current player White
         return onehot_w, onehot_b
-    else: # If player one is black -> flip perspective
+    else:
         return onehot_b, onehot_w
 
-def board_to_image(board, T: int = 8, repetitions: int = 2):
+def board_to_image(board, T: int = 8, repetitions: int = 2, history_perspective_flip: bool = True):
     M = 6 * 2 + repetitions
     image_shape = (T*M+L, N, N)
     num_planes = T*M+L
 
     image = np.zeros(image_shape, dtype=dtype)
     tmp = board.copy()
+    starting_player = board.turn
     for t in range(T):
-        current_player = tmp.turn
+        player_perspective = tmp.turn if history_perspective_flip else starting_player
         idx = t * M
-        board_np = parse_piece_map(tmp.piece_map(), not current_player) # Flip only for black
-        p1, p2 = pieces_onehot(board_np, current_player)
+        # If player perspective is Black (False) then not player perspective equals True and we flip the board
+        board_np = parse_piece_map(tmp.piece_map(), not player_perspective) 
+        p1, p2 = pieces_onehot(board_np, player_perspective)
         image[idx:idx+6, :, :] = p1
         image[idx + 6:idx+12, :, :] = p2
         for i in range(repetitions):
@@ -57,23 +59,35 @@ def board_to_image(board, T: int = 8, repetitions: int = 2):
         if len(tmp.move_stack) > 0:
             tmp.pop()
         else:
-            break
-    image[num_planes - 5, :, :] = int(board.has_kingside_castling_rights(board.turn)) # 104
-    image[num_planes - 4, :, :] = int(board.has_queenside_castling_rights(board.turn)) # 105
-    image[num_planes - 3, :, :] = int(board.has_kingside_castling_rights(not board.turn)) # 106
-    image[num_planes - 2, :, :] = int(board.has_queenside_castling_rights(not board.turn)) # 107
+            # If we wish to repeat last board state for time steps less than T, replace the following line with: continue
+            # AlphaZero paper describes repeating zeros for T - t time steps, replace the following line with: break
+            continue
+        
+    image[num_planes - 5, :, :] = int(board.has_queenside_castling_rights(starting_player)) # 104
+    image[num_planes - 4, :, :] = int(board.has_kingside_castling_rights(starting_player)) # 105
+    image[num_planes - 3, :, :] = int(board.has_queenside_castling_rights(not starting_player)) # 106
+    image[num_planes - 2, :, :] = int(board.has_kingside_castling_rights(not starting_player)) # 107
     image[num_planes - 1, :, :] = board.halfmove_clock
 
     return image
 
-def update_image(board, prev_image: np.ndarray, T: int = 8, repetitions: int = 2):
+def update_image(board, prev_image: np.ndarray, T: int = 8, repetitions: int = 2, history_perspective_flip: bool = True):
     M = 6 * 2 + repetitions
     image_shape = (T*M+L, N, N)
     num_planes = T*M+L
     new_image = np.zeros(image_shape, dtype=dtype)
     
-    # Copy previous time steps
-    new_image[M:T*M, :, :] = prev_image[0:(T-1)*M, :, :]
+    # Copy previous time steps 
+    if not history_perspective_flip:
+        flipped = np.flip(prev_image, axis=1)
+        flipped[M:T*M, :, :] = flipped[0:(T-1)*M, :, :]
+        for t in range(1, T, 1):
+            _from = (t * M)
+            _to = (t * M) + 6
+            new_image[_from:_to, :, :] = flipped[_from+6:_to+6, :, :]
+            new_image[_from+6:_to+6, :, :] = flipped[_from:_to, :, :]
+    else:
+        new_image[M:T*M, :, :] = prev_image[0:(T-1)*M, :, :]
 
     # fill in missing info of current timestep
     current_player = board.turn
@@ -84,10 +98,10 @@ def update_image(board, prev_image: np.ndarray, T: int = 8, repetitions: int = 2
     for i in range(repetitions):
         if board.is_repetition(i + 2):
             new_image[12 + i, :, :] = 1
-    new_image[num_planes-5, :, :] = int(board.has_kingside_castling_rights(current_player))
-    new_image[num_planes-4, :, :] = int(board.has_queenside_castling_rights(current_player))
-    new_image[num_planes-3, :, :] = int(board.has_kingside_castling_rights(not current_player))
-    new_image[num_planes-2, :, :] = int(board.has_queenside_castling_rights(not current_player))
+    new_image[num_planes-5, :, :] = int(board.has_queenside_castling_rights(current_player))
+    new_image[num_planes-4, :, :] = int(board.has_kingside_castling_rights(current_player))
+    new_image[num_planes-3, :, :] = int(board.has_queenside_castling_rights(not current_player))
+    new_image[num_planes-2, :, :] = int(board.has_kingside_castling_rights(not current_player))
     new_image[num_planes-1, :, :] = board.halfmove_clock
     return new_image
 

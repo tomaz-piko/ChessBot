@@ -5,7 +5,7 @@ import tensorflow as tf
 from train.config import TrainingConfig
 
 
-def save_trt_model(model, trt_model_path, precision_mode=trt.TrtPrecisionMode.FP32):
+def save_trt_model(model, trt_model_path, precision_mode='FP32'):
     config = TrainingConfig()
     def input_fn():
         positions = os.listdir("train/conversion_data")
@@ -26,19 +26,19 @@ def save_trt_model(model, trt_model_path, precision_mode=trt.TrtPrecisionMode.FP
     model.save(trt_model_path)
     conversion_params = trt.TrtConversionParams(
         precision_mode=precision_mode,
-        use_calibration=True if precision_mode == trt.TrtPrecisionMode.INT8 else False,
+        use_calibration=True if precision_mode == 'INT8' else False,
     )
 
     converter = trt.TrtGraphConverterV2(
         input_saved_model_dir=trt_model_path,
         conversion_params=conversion_params,
     )
-    if precision_mode == trt.TrtPrecisionMode.INT8:
+    if precision_mode == 'INT8':
         converter.convert(calibration_input_fn=input_fn)
     else:
         converter.convert()
 
-    if precision_mode != trt.TrtPrecisionMode.INT8:
+    if precision_mode != 'INT8':
         converter.build(input_fn=input_fn)
         
     converter.save(trt_model_path)
@@ -69,3 +69,14 @@ def load_trt_checkpoint_latest():
     models.sort()
     latest = models[-1]
     return load_trt_checkpoint(f"{latest}")
+
+def load_tmp_trt_checkpoint():
+    """Loads the latest TensorRT model from the checkpoint directory.
+
+    Returns:
+        trt_func, model: The TensorRT predict function and the loaded model.
+    """
+    config = TrainingConfig()
+    loaded_model = tf.saved_model.load(f"{config.tmp_trt_checkpoint_dir}/saved_model")
+    trt_func = loaded_model.signatures['serving_default']
+    return trt_func, loaded_model 

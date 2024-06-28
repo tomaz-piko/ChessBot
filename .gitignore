@@ -14,4 +14,6 @@ main/puzzles
 *.so
 */cppchess/src
 main/train/conversion_data
+main/train/conversion_data_no_reps
+main/train/conversion_data_one_rep
 main/lichess-bot
