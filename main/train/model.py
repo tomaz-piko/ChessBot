@@ -52,11 +52,7 @@ def generate_model():
     policy_head = Dense(config.num_actions, activation='linear', use_bias=config.use_bias_on_outputs, kernel_regularizer=l2(config.l2_reg), name="policy_head")(policy_head)
 
     # Define the optimizer
-    learning_rate = config.learning_rate["Static"]["lr"]
-    if config.optimizer == "SGD":      
-        optimizer = SGD(learning_rate=learning_rate, nesterov=config.sgd_nesterov, momentum=config.sgd_momentum)
-    elif config.optimizer == "Adam":
-        optimizer = Adam(learning_rate=learning_rate)
+    optimizer = SGD(learning_rate=config.learning_rate, nesterov=config.sgd_nesterov, momentum=config.sgd_momentum)
 
     # Define the model
     model = Model(inputs=input_layer, outputs=[value_head, policy_head])
@@ -69,6 +65,7 @@ def generate_model():
         loss_weights={
             "value_head": config.value_head_loss_weight,
             "policy_head": config.policy_head_loss_weight
-        }
+        },
+        metrics=["accuracy"]
     )
     return model

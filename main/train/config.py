@@ -50,55 +50,32 @@ class TrainingConfig:
         self.optimizer = "SGD"
         self.sgd_momentum = 0.9
         self.sgd_nesterov = False
-        self.learning_rate_scheduler = "Static" # Cyclic / Static / Descreasing
-        self.learning_rate = {
-            "Cyclic": {
-                "base_lr": 0.001,
-                "max_lr": 0.1,
-                "step_size": 4, # self.max_epochs_per_cycle // batches_per_epoch
-                "mode": "triangular",
-            },
-            "Static": {
-                "lr": 0.025 #3.125e-3 #0.025
-            },
-            "Decreasing": {
-                "lr": {
-                    0: 3.125e-3,
-                    1000: 3.125e-4,
-                    2000: 3.125e-5
-                }
-            }
-        }
-
-        # STS Testing info
-        self.sts_test_interval = 5
-        self.sts_num_agents = 8
-        self.sts_time_limit = 1.25
+        self.learning_rate = 0.025
 
         # Training info
         self.num_actors = 2
-        self.num_cycles = 500
-
         self.checkpoint_interval = 25 # Every n cycles 
-        # Cycles are used for a cyclic style of learning, train games -> prepare data -> train -> repeat
-        # Projects with more computer power do all these steps asynchonosly 
-        self.games_per_cycle = 350 #50 # if avg length is 60, 100 games is 6000 samples * 0.25 (playout cap randomization) = 1500 samples * 6 (max trains per sample) = 9000 training samples
+        self.games_per_cycle = 50 
         self.batch_size = 512
-        # 1 batch per epoch mimics AZ and other research when measuring in steps
-        self.batches_per_epoch = 1 # 12
+        self.sampling_ratio = 0.80 # 0.0 - 1.0 -> Percentage of samples used for training
 
-        # New implementation
-        self.epochs_per_cycle = 80
-        self.min_samples_per_cycle = self.batch_size * self.batches_per_epoch * self.epochs_per_cycle
+        # STS Testing info
+        self.sts_test_interval = 5 # Every n cycles
+        self.sts_num_agents = 8
+        self.sts_time_limit = 1.25
 
-        # Data storage info
-        self.max_trains_per_sample = 1 # To prevent overfitting
-        self.keep_positions_num = 100000 # When reached, oldest positions are deleted
-        self.keep_records_num = 3 # When reached, oldest records are deleted
-
+        # OBSOLETE
+        # parameters removed with the introduction of sampling_ratio
+        #self.batches_per_epoch = 1 # Should always be 1
+        #self.epochs_per_cycle = 80 # OBSOLETE -> Need to be calculated based on batches and sampling ratio
+        #self.max_trains_per_sample = 1 # Also obsolete
+        #self.keep_positions_num = 100000 # When reached, oldest positions are deleted
+        #self.min_samples_per_cycle = self.batch_size * self.batches_per_epoch * self.epochs_per_cycle
+        #self.keep_records_num = 3 # When reached, oldest records are deleted
+        
         # Define a name for model to diferentiante between different models on tensorboard
         bias = "_bias" if self.use_bias_on_outputs else ""
-        self.model_name = f"b{self.num_residual_blocks}c{self.conv_filters}_SGD_bs{self.batch_size}{bias}_2"
+        self.model_name = f"b{self.num_residual_blocks}c{self.conv_filters}_SGD_bs{self.batch_size}{bias}_3"
 
         # Save directories
         self.self_play_positions_dir = f"{current_dir}/data/positions"
