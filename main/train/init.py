@@ -1,7 +1,5 @@
 from .model import generate_model
 from .config import TrainingConfig
-from tensorflow.python.compiler.tensorrt import trt_convert as trt
-from tensorflow.python.compiler.tensorrt.trt_convert import TrtPrecisionMode
 from datetime import datetime
 import shutil
 import os
@@ -12,8 +10,8 @@ config = TrainingConfig()
 if os.path.exists(config.self_play_positions_dir):
     shutil.rmtree(config.self_play_positions_dir)
 
-#if os.path.exists(config.tensorboard_log_dir):
-#    shutil.rmtree(config.tensorboard_log_dir)
+""" if os.path.exists(config.tensorboard_log_dir):
+    shutil.rmtree(config.tensorboard_log_dir) """
 
 if os.path.exists(config.training_records_dir):
     shutil.rmtree(config.training_records_dir)
@@ -26,9 +24,6 @@ if os.path.exists(config.trt_checkpoint_dir):
 
 if os.path.exists(config.tmp_trt_checkpoint_dir):
     shutil.rmtree(config.tmp_trt_checkpoint_dir)
-
-if os.path.exists(config.positions_usage_stats):
-    os.remove(config.positions_usage_stats)
     
 if os.path.exists(config.training_info_stats):
     os.remove(config.training_info_stats)

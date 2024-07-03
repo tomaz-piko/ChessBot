@@ -8,10 +8,10 @@ from train.config import TrainingConfig
 def save_trt_model(model, trt_model_path, precision_mode='FP32'):
     config = TrainingConfig()
     def input_fn():
-        positions = os.listdir("train/conversion_data")
+        positions = os.listdir(config.conversion_data_dir)
         images = []
         for pos in positions:
-            data_np = np.load(f"train/conversion_data/{pos}")
+            data_np = np.load(f"{config.conversion_data_dir}/{pos}")
             images.append(data_np["image"])
         images = np.array(images).astype(np.float32)
         images[:, -1] /= 99.0

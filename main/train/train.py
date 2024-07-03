@@ -37,7 +37,7 @@ def play_n_games(pid, config, games_count):
         for i, (image, terminal_value, visit_count) in enumerate(zip(images, terminal_values, visit_counts)):
             # Save each position as npz
             np.savez_compressed(f"{config.self_play_positions_dir}/{pid}_{current_game}_{i}-{timestamp}.npz", 
-                                image=image, 
+                                image=image,
                                 terminal_value=[terminal_value],
                                 visit_count=visit_count)
         del images, terminal_values, visit_counts
@@ -65,7 +65,7 @@ def prepare_data(config):
     assert len(positions) > config.batch_size, "Not enough positions to generate training data. Run self_play first."
 
     num_samples = int(len(positions) * config.sampling_ratio)
-    epochs_count = int(num_samples / config.batch_size)
+    epochs_count = num_samples // config.batch_size
     num_samples = epochs_count * config.batch_size
     positions_chosen = np.random.default_rng().choice(len(positions), size=num_samples, replace=False)
 
@@ -245,7 +245,7 @@ if __name__ == "__main__":
         initial_step = training_info_stats["last_finished_step"] + 1
 
     i = initial_step
-    while True:
+    while i <= config.num_cycles:
         # Generate N games
         print(f"Scheduling self play training step {i}.")
         if not skip_selfplay_step: # Todo make option to skip multiple self play steps
